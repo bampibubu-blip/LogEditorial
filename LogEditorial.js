@@ -1,5 +1,5 @@
 //@name LogEditorial
-//@display-name 📖 Log Editorial 1.0.0
+//@display-name 🗃️ Log Editorial 1.0.0
 //@api 3.0
 //@version 1.0.0
 //@update-url https://raw.githubusercontent.com/bampibubu-blip/LogEditorial/main/LogEditorial.js
@@ -2202,7 +2202,7 @@
 
   // 플러그인 버튼 등록
   try {
-    await R.registerButton({ name: NAME, icon: '📖', iconType: 'html', location: 'chat', id: 'log-editorial-open' }, () => start(false));
+    await R.registerButton({ name: NAME, icon: '🗃️', iconType: 'html', location: 'chat', id: 'log-editorial-open' }, () => start(false));
   } catch (e) {
     console.error(NAME + ': 버튼 등록 실패', e);
   }
