@@ -661,9 +661,8 @@
       const quotes = seg.filter((u) => u.kind === 'quote').map((u) => u.html).join('');
       if (ch.titled) {
         const opener = renderOpener(ch, t, !startsHere);
-        if (o.toggle && o.toggle !== 'off') {
-          // 출력은 아카와 같게 접힌 상태, 미리보기에서만 펼쳐 보여 줌
-          const open = !!o.previewOpen;
+        if (o.toggle !== 'off') {
+          const open = o.toggle === 'all' || (o.toggle === 'first' && ch.num === 1);
           h += `<details${open ? ' open=""' : ''} style="margin:${h ? 52 : 56}px 0 0 0;padding:0;"><summary style="list-style:none;cursor:pointer;text-align:center;padding:0 0 38px 0;outline:none;">${opener}<div style="display:inline-block;margin:16px 0 0 0;padding:4px 14px;border-radius:999px;background:${t.panel};font-size:10.5px;letter-spacing:0.14em;color:${t.toggle};">접기 · 펼치기</div></summary><div style="margin:0;padding:0;">${body}</div></details>`;
         } else {
           h += `<div style="margin:${h ? 52 : 56}px 0 0 0;padding:0;"><div style="text-align:center;padding:0 0 38px 0;">${opener}</div><div style="margin:0;padding:0;">${body}</div></div>`;
@@ -914,7 +913,7 @@
    * 7. 상태
    * ======================================================= */
   const DEFAULT_PREFS = {
-    theme: 'sage', dlgStyle: 'marker', dropCap: true, toggle: 'off', mode: 'original', plateCaption: true,
+    theme: 'sage', dlgStyle: 'marker', dropCap: true, toggle: 'first', mode: 'original', plateCaption: true,
     masthead: true, imageMode: 'url', maxW: 960, quality: 0.86, limit: 60000, thumbnail: true, includeGreeting: true,
     split: true, ui: 'auto', recentN: 30, font: 'serif', plateLabel: 'PLATE {n}', userStyle: 'none', hideUser: false, credit: true,
     custom: { mat: '#e8e6df', sheet: '#fbfaf6', ink: '#2a2f2b', accent: '#5d7466', dlg: '', head: '', overrides: {} }, userThemes: []
@@ -1323,8 +1322,7 @@
         <div class="fo-hint">이름표에는 등장인물 탭의 이름이 쓰여요.</div>
         </div>
         <div class="fo-sec"><h4>본문</h4>
-        ${select('챕터 접기', p + '.toggle', [['off', '펼친 본문 (토글 없음)'], ['on', '토글로 접기']])}
-        ${S.prefs.toggle !== 'off' ? '<div class="fo-hint">아카라이브는 글을 저장할 때 펼침 상태를 지워서, 토글은 모두 접힌 채로 보여요. 미리보기에서만 펼쳐서 보여 드려요.</div>' : ''}
+        ${select('챕터 접기', p + '.toggle', [['first', '토글 · 첫 챕터만 펼침'], ['all', '토글 · 모두 펼침'], ['none', '토글 · 모두 접힘'], ['off', '토글 끄기']])}
         </div>
         <div class="fo-sec"><h4>번역</h4>
         ${select('본문 언어', p + '.mode', [['original', '원문'], ['gigatrans', '번역문 (GigaTrans)'], ['cache', '번역 캐시 (실험적)']])}
@@ -1575,7 +1573,7 @@
       const c = imgCacheGet(key, coverKey);
       return c ? c.dataUrl : (directUrl(uk) || '');
     };
-    const o = { ...S.prefs, previewOpen: forOutput === false, names: { user: S.doc.cast.user.name || S.ctx.userName || 'USER', char: S.doc.cast.char.name || S.ctx.charName || 'CHAR' }, themeObj: resolveTheme(), mark: forOutput === false && !!S.editing, captions: S.doc.captions || {}, limit: S.prefs.split ? (Number(S.prefs.limit) || 60000) : Infinity, thumbnail: !!(forOutput === true && S.prefs.thumbnail && S.prefs.imageMode === 'url') };
+    const o = { ...S.prefs, names: { user: S.doc.cast.user.name || S.ctx.userName || 'USER', char: S.doc.cast.char.name || S.ctx.charName || 'CHAR' }, themeObj: resolveTheme(), mark: forOutput === false && !!S.editing, captions: S.doc.captions || {}, limit: S.prefs.split ? (Number(S.prefs.limit) || 60000) : Infinity, thumbnail: !!(forOutput === true && S.prefs.thumbnail && S.prefs.imageMode === 'url') };
     return { parts: renderDocument(model, S.doc, o, srcOf), model, coverKey };
   }
 
@@ -2119,7 +2117,7 @@
     try {
       const prefs = await store.get(KEY + 'prefs');
       S.prefs = { ...DEFAULT_PREFS, ...(prefs || {}) };
-      if (['first', 'all', 'none'].includes(S.prefs.toggle)) S.prefs.toggle = 'on';
+      if (!['first', 'all', 'none', 'off'].includes(S.prefs.toggle)) S.prefs.toggle = 'first';
       const ctx = await loadContext();
       if (!reload || !S.ctx || S.ctx.chatKey !== ctx.chatKey) S.images = {};
       S.ctx = ctx;
