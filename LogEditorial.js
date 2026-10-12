@@ -1,13 +1,13 @@
 //@name LogEditorial
-//@display-name 🗃️ Log Editorial 1.0.0
+//@display-name 🗃️ Log Editorial 1.0.1
 //@api 3.0
-//@version 1.0.0
+//@version 1.0.1
 //@update-url https://raw.githubusercontent.com/bampibubu-blip/LogEditorial/main/LogEditorial.js
 //@description 에셋메이드 삽화가 들어간 채팅 로그를 아카라이브용 에디토리얼 HTML로 만듭니다.
 (async () => {
   'use strict';
 
-  const VERSION = '1.0.0';
+  const VERSION = '1.0.1';
   const NAME = 'Log Editorial';
   // 저장소 키 (정식 출시 전 'folio:' 키로 저장된 설정도 읽어옴)
   const KEY = 'logeditorial:', LEGACY = 'folio:';
@@ -433,6 +433,10 @@
     return h;
   }
 
+  // 아카는 게시할 때 <a>의 style을 모두 지움 → 상자는 바깥 span, 글자색은 링크 안쪽 span에
+  const linkBox = (url, label, boxStyle, color) =>
+    `<span style="${boxStyle}"><a href="${escUrl(url)}" target="_blank"><span style="color:${color};">${label}</span></a></span>`;
+
   const chip = (text, t) =>
     `<span style="display:inline-block;margin:3px 4px;padding:5px 12px;border-radius:999px;${bd(1, t.chipLine)}font-size:11px;line-height:1.4;letter-spacing:0.08em;color:${t.soft};">${esc(text)}</span>`;
   const tagChip = (text, t) =>
@@ -440,7 +444,7 @@
 
   function renderMasthead(doc, t) {
     const c = doc.cover;
-    return `<div style="font-size:0;line-height:0;padding:0 0 12px 0;"><div style="display:inline-block;width:64%;vertical-align:middle;text-align:left;font-size:10.5px;line-height:1.4;letter-spacing:0.22em;color:${t.ink};font-weight:600;">${esc(macro(c.mastLeft || 'THE ROLEPLAY LOG'))}</div><div style="display:inline-block;width:36%;vertical-align:middle;text-align:right;font-size:10.5px;line-height:1.4;letter-spacing:0.14em;color:${t.muted};">${esc(macro(c.mastRight || ''))}</div></div>`
+    return `<div style="font-size:0;line-height:0;padding:0 0 12px 0;"><div style="display:inline-block;width:64%;vertical-align:middle;text-align:left;font-size:10.5px;line-height:1.4;letter-spacing:0.22em;color:${t.ink};font-weight:600;"><span style="font-size:10.5px;line-height:1.4;letter-spacing:0.22em;color:${t.ink};font-weight:600;">${esc(macro(c.mastLeft || 'THE ROLEPLAY LOG'))}</span></div><div style="display:inline-block;width:36%;vertical-align:middle;text-align:right;font-size:10.5px;line-height:1.4;letter-spacing:0.14em;color:${t.muted};"><span style="font-size:10.5px;line-height:1.4;letter-spacing:0.14em;color:${t.muted};">${esc(macro(c.mastRight || ''))}</span></div></div>`
       + `<div style="height:1px;background:${t.rule};font-size:0;line-height:0;"></div><div style="height:1px;background:${t.ruleSoft};margin:3px 0 30px 0;font-size:0;line-height:0;"></div>`;
   }
 
@@ -455,7 +459,7 @@
     const chips = [];
     if (c.author) chips.push(chip('by ' + c.author, t));
     for (const x of String(c.chips || '').split(',').map((s) => s.trim()).filter(Boolean)) chips.push(chip(x, t));
-    if (c.botUrl) chips.push(`<a href="${escUrl(c.botUrl)}" target="_blank" style="display:inline-block;margin:3px 4px;padding:5px 14px;border-radius:999px;background:${t.accent};font-size:11px;line-height:1.4;letter-spacing:0.08em;color:${t.onAccent};text-decoration:none;">${esc(c.botLabel || 'Open Bot')} ↗</a>`);
+    if (c.botUrl) chips.push(linkBox(c.botUrl, esc(c.botLabel || 'Open Bot') + ' ↗', `display:inline-block;margin:3px 4px;padding:5px 14px;border-radius:999px;background:${t.accent};font-size:11px;line-height:1.4;letter-spacing:0.08em;color:${t.onAccent};`, t.onAccent));
     if (chips.length) h += `<div style="margin:26px 0 22px 0;">${ornament(t)}</div><div style="font-size:0;line-height:0;">${chips.join('')}</div>`;
     h += '</div>';
     return h;
@@ -517,8 +521,8 @@
         const st = solid
           ? `background:${t.accent};color:${t.onAccent};`
           : `${bd(1, t.chipLine)}color:${t.soft};`;
-        const base = `display:inline-block;margin:6px 5px 0 5px;padding:9px 20px;border-radius:999px;font-size:13px;letter-spacing:0.04em;text-decoration:none;${st}`;
-        return url ? `<a href="${escUrl(url)}" target="_blank" style="${base}">${label}</a>` : `<span style="${base}">${label}</span>`;
+        const base = `display:inline-block;margin:6px 5px 0 5px;padding:9px 20px;border-radius:999px;font-size:13px;letter-spacing:0.04em;${st}`;
+        return url ? linkBox(url, label, base, solid ? t.onAccent : t.soft) : `<span style="${base}">${label}</span>`;
       };
       let nav = '';
       if (n > 1) nav += pill('← Part ' + (n - 1), links[n - 2], false);
@@ -657,8 +661,9 @@
       const quotes = seg.filter((u) => u.kind === 'quote').map((u) => u.html).join('');
       if (ch.titled) {
         const opener = renderOpener(ch, t, !startsHere);
-        if (o.toggle !== 'off') {
-          const open = o.toggle === 'all' || (o.toggle === 'first' && ch.num === 1);
+        if (o.toggle && o.toggle !== 'off') {
+          // 출력은 아카와 같게 접힌 상태, 미리보기에서만 펼쳐 보여 줌
+          const open = !!o.previewOpen;
           h += `<details${open ? ' open=""' : ''} style="margin:${h ? 52 : 56}px 0 0 0;padding:0;"><summary style="list-style:none;cursor:pointer;text-align:center;padding:0 0 38px 0;outline:none;">${opener}<div style="display:inline-block;margin:16px 0 0 0;padding:4px 14px;border-radius:999px;background:${t.panel};font-size:10.5px;letter-spacing:0.14em;color:${t.toggle};">접기 · 펼치기</div></summary><div style="margin:0;padding:0;">${body}</div></details>`;
         } else {
           h += `<div style="margin:${h ? 52 : 56}px 0 0 0;padding:0;"><div style="text-align:center;padding:0 0 38px 0;">${opener}</div><div style="margin:0;padding:0;">${body}</div></div>`;
@@ -909,7 +914,7 @@
    * 7. 상태
    * ======================================================= */
   const DEFAULT_PREFS = {
-    theme: 'sage', dlgStyle: 'marker', dropCap: true, toggle: 'first', mode: 'original', plateCaption: true,
+    theme: 'sage', dlgStyle: 'marker', dropCap: true, toggle: 'off', mode: 'original', plateCaption: true,
     masthead: true, imageMode: 'url', maxW: 960, quality: 0.86, limit: 60000, thumbnail: true, includeGreeting: true,
     split: true, ui: 'auto', recentN: 30, font: 'serif', plateLabel: 'PLATE {n}', userStyle: 'none', hideUser: false, credit: true,
     custom: { mat: '#e8e6df', sheet: '#fbfaf6', ink: '#2a2f2b', accent: '#5d7466', dlg: '', head: '', overrides: {} }, userThemes: []
@@ -1318,7 +1323,8 @@
         <div class="fo-hint">이름표에는 등장인물 탭의 이름이 쓰여요.</div>
         </div>
         <div class="fo-sec"><h4>본문</h4>
-        ${select('챕터 접기', p + '.toggle', [['first', '토글 · 첫 챕터만 펼침'], ['all', '토글 · 모두 펼침'], ['none', '토글 · 모두 접힘'], ['off', '토글 끄기']])}
+        ${select('챕터 접기', p + '.toggle', [['off', '펼친 본문 (토글 없음)'], ['on', '토글로 접기']])}
+        ${S.prefs.toggle !== 'off' ? '<div class="fo-hint">아카라이브는 글을 저장할 때 펼침 상태를 지워서, 토글은 모두 접힌 채로 보여요. 미리보기에서만 펼쳐서 보여 드려요.</div>' : ''}
         </div>
         <div class="fo-sec"><h4>번역</h4>
         ${select('본문 언어', p + '.mode', [['original', '원문'], ['gigatrans', '번역문 (GigaTrans)'], ['cache', '번역 캐시 (실험적)']])}
@@ -1569,7 +1575,7 @@
       const c = imgCacheGet(key, coverKey);
       return c ? c.dataUrl : (directUrl(uk) || '');
     };
-    const o = { ...S.prefs, names: { user: S.doc.cast.user.name || S.ctx.userName || 'USER', char: S.doc.cast.char.name || S.ctx.charName || 'CHAR' }, themeObj: resolveTheme(), mark: forOutput === false && !!S.editing, captions: S.doc.captions || {}, limit: S.prefs.split ? (Number(S.prefs.limit) || 60000) : Infinity, thumbnail: !!(forOutput === true && S.prefs.thumbnail && S.prefs.imageMode === 'url') };
+    const o = { ...S.prefs, previewOpen: forOutput === false, names: { user: S.doc.cast.user.name || S.ctx.userName || 'USER', char: S.doc.cast.char.name || S.ctx.charName || 'CHAR' }, themeObj: resolveTheme(), mark: forOutput === false && !!S.editing, captions: S.doc.captions || {}, limit: S.prefs.split ? (Number(S.prefs.limit) || 60000) : Infinity, thumbnail: !!(forOutput === true && S.prefs.thumbnail && S.prefs.imageMode === 'url') };
     return { parts: renderDocument(model, S.doc, o, srcOf), model, coverKey };
   }
 
@@ -2113,6 +2119,7 @@
     try {
       const prefs = await store.get(KEY + 'prefs');
       S.prefs = { ...DEFAULT_PREFS, ...(prefs || {}) };
+      if (['first', 'all', 'none'].includes(S.prefs.toggle)) S.prefs.toggle = 'on';
       const ctx = await loadContext();
       if (!reload || !S.ctx || S.ctx.chatKey !== ctx.chatKey) S.images = {};
       S.ctx = ctx;
