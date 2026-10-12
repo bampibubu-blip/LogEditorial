@@ -412,7 +412,8 @@
   }
 
   const ornament = (t, w = 64) =>
-    `<div style="font-size:0;line-height:0;text-align:center;"><span style="display:inline-block;width:${w}px;height:1px;background:${t.line};vertical-align:middle;"></span><span style="display:inline-block;margin:0 14px;font-size:12px;line-height:1;color:${t.accent};vertical-align:middle;">✦</span><span style="display:inline-block;width:${w}px;height:1px;background:${t.line};vertical-align:middle;"></span></div>`;
+    // 아카 에디터가 빈 span을 지우므로 선은 내용이 있는 div로 그림
+    `<div style="font-size:0;line-height:0;text-align:center;"><div style="display:inline-block;width:${w}px;height:1px;background:${t.line};vertical-align:middle;font-size:0;line-height:0;">&nbsp;</div><div style="display:inline-block;margin:0 14px;font-size:12px;line-height:1;color:${t.accent};vertical-align:middle;">✦</div><div style="display:inline-block;width:${w}px;height:1px;background:${t.line};vertical-align:middle;font-size:0;line-height:0;">&nbsp;</div></div>`;
 
   function plateCaption(o, key, num) {
     const own = o.captions && o.captions[key];
