@@ -1,5 +1,5 @@
 //@name LogEditorial
-//@display-name 🗃 Log Editorial 1.0.0
+//@display-name 📖 Log Editorial 1.0.0
 //@api 3.0
 //@version 1.0.0
 //@update-url https://raw.githubusercontent.com/bampibubu-blip/LogEditorial/main/LogEditorial.js
