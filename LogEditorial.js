@@ -1,13 +1,13 @@
 //@name LogEditorial
-//@display-name 🗃️ Log Editorial 1.0.1
+//@display-name 🗃️ Log Editorial 1.2.0
 //@api 3.0
-//@version 1.0.1
+//@version 1.2.0
 //@update-url https://raw.githubusercontent.com/bampibubu-blip/LogEditorial/main/LogEditorial.js
 //@description 에셋메이드 삽화가 들어간 채팅 로그를 아카라이브용 에디토리얼 HTML로 만듭니다.
 (async () => {
   'use strict';
 
-  const VERSION = '1.0.1';
+  const VERSION = '1.2.0';
   const NAME = 'Log Editorial';
   // 저장소 키 (정식 출시 전 'folio:' 키로 저장된 설정도 읽어옴)
   const KEY = 'logeditorial:', LEGACY = 'folio:';
@@ -193,16 +193,19 @@
     return s.length;
   }
 
+  const isAmAsset = (name) => /\.__am__\./.test(String(name || ''));
+
   function imageFromImgTag(tag) {
     const asset = attr(tag, 'data-am-asset');
     const src = attr(tag, 'src');
     const w = parseInt(attr(tag, 'width'), 10) || 0;
     const h = parseInt(attr(tag, 'height'), 10) || 0;
     const raw = src.match(/^\{\{\s*raw::([\s\S]+?)\}\}$/i);
-    if (asset) return { kind: 'asset', name: asset, w, h };
-    if (raw) return { kind: 'asset', name: raw[1].trim(), w, h };
-    if (/^(https?:)?\/\//i.test(src)) return { kind: 'url', src, w, h };
-    if (/^data:image\//i.test(src)) return { kind: 'url', src, w, h };
+    const am = !!asset || /\b(?:x-risu-)?am-/i.test(attr(tag, 'class'));
+    if (asset) return { kind: 'asset', name: asset, w, h, am: true };
+    if (raw) { const name = raw[1].trim(); return { kind: 'asset', name, w, h, am: am || isAmAsset(name) }; }
+    if (/^(https?:)?\/\//i.test(src)) return { kind: 'url', src, w, h, am };
+    if (/^data:image\//i.test(src)) return { kind: 'url', src, w, h, am };
     return null;
   }
 
@@ -238,6 +241,7 @@
         const a = attr(m[0], 'data-am-asset');
         if (a) img = { kind: 'asset', name: a, w: 0, h: 0 };
       }
+      if (img) img.am = true;
       out += s.slice(pos, start) + token(img);
       pos = end;
       AM_PROJ_OPEN.lastIndex = end;
@@ -246,7 +250,9 @@
     // 남은 일반 이미지
     s = s.replace(/<img\b[^>]*>/gi, (tag) => token(imageFromImgTag(tag)));
     // 사용자 첨부 이미지
-    s = s.replace(/\{\{\s*inlay(?:ed)?::([a-f0-9-]+)\s*\}\}/gi, (_, id) => token({ kind: 'inlay', id, w: 0, h: 0 }));
+    s = s.replace(/\{\{\s*inlay(?:ed)?::([a-f0-9-]+)\s*\}\}/gi, (_, id) => token({ kind: 'inlay', id, w: 0, h: 0, am: false }));
+    // 리스 에셋 매크로 (캐릭터 에셋 · 감정 이미지). 기존 편집본의 번호가 밀리지 않게 맨 마지막에 번호를 매김
+    s = s.replace(/\{\{\s*(img|image|asset|emotion|raw)\s*::\s*([^{}]+?)\s*\}\}/gi, (_, kind, name) => token({ kind: 'asset', name: name.trim(), w: 0, h: 0, am: isAmAsset(name) }));
     return { text: s, images };
   }
 
@@ -315,12 +321,14 @@
     // 직접 편집한 메시지는 이미 치환이 끝난 확정 본문
     if (typeof opts.override !== 'string') text = applyReplacements(text, opts.replacements);
     const blocks = [];
+    let hidden = 0;
     for (let line of text.split('\n')) {
       line = line.replace(/\u00a0/g, ' ').trim();
       if (!line) continue;
       const tm = line.match(/^\u2063IMG(\d+)\u2063$/) || line.match(/^⟦삽화:(\d+)⟧$/);
       if (tm) {
         const img = ex.images[+tm[1]];
+        if (img && img.am === false && !opts.otherImages) { hidden++; continue; }
         if (img) blocks.push({ type: 'img', img, key: imageKey(img), token: '⟦삽화:' + tm[1] + '⟧' });
         continue;
       }
@@ -336,14 +344,14 @@
       if (SCENE_BREAK.test(line)) { blocks.push({ type: 'break' }); continue; }
       blocks.push({ type: 'p', text: line, dialogue: DIALOGUE_START.test(line) });
     }
-    return { blocks, images: ex.images, hasTranslation: !!langs };
+    return { blocks, images: ex.images, hasTranslation: !!langs, hidden };
   }
 
   // 블록 → 편집용 줄 (이미지는 ⟦삽화:n⟧ / ⟦이미지:id⟧)
   const blockLine = (b) => (b.type === 'img' ? b.token : b.type === 'break' ? '* * *' : b.text);
   const blocksToText = (blocks) => blocks.map(blockLine).join('\n\n');
   function blocksToEditable(raw, opts) {
-    return blocksToText(parseMessage(raw, opts).blocks);
+    return blocksToText(parseMessage(raw, { ...opts, otherImages: true }).blocks);
   }
 
   // 일반 / 정규식 치환. 잘못된 정규식은 건너뜀
@@ -471,7 +479,8 @@
     const top = src || layout.anyPortrait ? 60 : 24;
     // 좁은 화면(카드 영역이 layout.bp 미만)에서는 한 줄에 하나씩 꽉 차게
     let h = `<div style="display:inline-block;width:${layout.width};width:max(${layout.width},calc((${layout.bp}px - 100%) * 999));max-width:100%;vertical-align:top;box-sizing:border-box;padding:0 8px;font-size:15px;line-height:1.6;"><div style="margin:${top}px 0 0 0;background:${t.panel};border-radius:16px;padding:${src ? 1 : 22}px 20px 24px 20px;">`;
-    if (src) h += `<img src="${escUrl(src)}" alt="" style="width:92px;height:92px;border-radius:50%;display:block;margin:-47px auto 0 auto;${bd(4, t.sheet)}">`;
+    // 크기를 틀 · 이미지 · 속성 세 겹으로 고정 (이미지 자체도 정사각형으로 잘라 둠)
+    if (src) h += `<div style="width:92px;height:92px;min-width:92px;max-width:92px;min-height:92px;max-height:92px;margin:-47px auto 0 auto;border-radius:50%;overflow:hidden;${bd(4, t.sheet)}background:${t.panel};line-height:0;font-size:0;"><img src="${escUrl(src)}" width="92" height="92" alt="" style="width:92px;height:92px;min-width:92px;max-width:92px;min-height:92px;max-height:92px;display:block;margin:0;border-radius:50%;object-fit:cover;"></div>`;
     h += `<div style="font-size:10px;letter-spacing:0.3em;color:${t.faint};margin:${src ? 14 : 0}px 0 0 0;">${role}</div>`;
     h += `<div${fo('bind', { path: 'doc.cast.' + who + '.name' })} style="${HF}font-size:19px;font-weight:600;color:${t.head};margin:4px 0 0 0;">${esc(p.name || '')}</div>`;
     if (tags.length) h += `<div style="font-size:0;line-height:0;margin:10px 0 0 0;">${tags.map((x) => tagChip(x, t)).join('')}</div>`;
@@ -781,14 +790,30 @@
   }
 
   // maxW 기준 리사이즈, square면 가운데 정사각형으로 자름
-  async function encodeImage(blob, { maxW = 960, quality = 0.86, square = 0 } = {}) {
+  // 비율(aspect)에 맞는 가장 큰 영역을 줌만큼 줄이고, x·y(0~100%)로 위치를 정함
+  const PORTRAIT_CROP = { x: 50, y: 35, zoom: 1 };
+  function cropRect(W, H, aspect, crop) {
+    const c = crop || {};
+    let cw = W, ch = H;
+    if (W / H > aspect) cw = H * aspect; else ch = W / aspect;
+    const z = clamp(Number(c.zoom) || 1, 1, 4);
+    cw /= z; ch /= z;
+    const x = clamp(c.x == null ? 50 : Number(c.x), 0, 100), y = clamp(c.y == null ? 50 : Number(c.y), 0, 100);
+    return { sx: (W - cw) * x / 100, sy: (H - ch) * y / 100, sw: cw, sh: ch };
+  }
+
+  async function encodeImage(blob, { maxW = 960, quality = 0.86, square = 0, aspect = 0, crop = null } = {}) {
     const img = await blobToImage(blob);
     let sx = 0, sy = 0, sw = img.naturalWidth, sh = img.naturalHeight;
     let dw, dh;
     if (square) {
-      const s = Math.min(sw, sh);
-      sx = (sw - s) / 2; sy = Math.max(0, (sh - s) / 2 - s * 0.08); sw = sh = s;
-      dw = dh = Math.min(square, s);
+      const r = cropRect(sw, sh, 1, crop || PORTRAIT_CROP);
+      sx = r.sx; sy = r.sy; sw = r.sw; sh = r.sh;
+      dw = dh = Math.max(1, Math.round(Math.min(square, sw)));
+    } else if (aspect) {
+      const r = cropRect(sw, sh, aspect, crop);
+      sx = r.sx; sy = r.sy; sw = r.sw; sh = r.sh;
+      dw = Math.max(1, Math.round(Math.min(maxW, sw))); dh = Math.max(1, Math.round(dw / aspect));
     } else {
       const k = Math.min(1, maxW / sw);
       dw = Math.round(sw * k); dh = Math.round(sh * k);
@@ -904,7 +929,7 @@
   };
 
   if (TEST) {
-    globalThis.__LOGEDITORIAL__ = { deriveTheme, contrast, THEME_ORDER, extractImages, parseMessage, renderDocument, splitParts, extractArcaUrls, makeZip, crc32, THEMES, blocksToEditable, blocksToText, visibleLength, applyReplacements };
+    globalThis.__LOGEDITORIAL__ = { cropRect, deriveTheme, contrast, THEME_ORDER, extractImages, parseMessage, renderDocument, splitParts, extractArcaUrls, makeZip, crc32, THEMES, blocksToEditable, blocksToText, visibleLength, applyReplacements };
     return;
   }
   if (!R) { console.error(NAME + ': RisuAI 플러그인 API를 찾지 못했습니다.'); return; }
@@ -915,11 +940,11 @@
   const DEFAULT_PREFS = {
     theme: 'sage', dlgStyle: 'marker', dropCap: true, toggle: 'first', mode: 'original', plateCaption: true,
     masthead: true, imageMode: 'url', maxW: 960, quality: 0.86, limit: 60000, thumbnail: true, includeGreeting: true,
-    split: true, ui: 'auto', recentN: 30, font: 'serif', plateLabel: 'PLATE {n}', userStyle: 'none', hideUser: false, credit: true,
+    split: true, ui: 'auto', recentN: 30, font: 'serif', plateLabel: 'PLATE {n}', userStyle: 'none', hideUser: false, credit: true, otherImages: false,
     custom: { mat: '#e8e6df', sheet: '#fbfaf6', ink: '#2a2f2b', accent: '#5d7466', dlg: '', head: '', overrides: {} }, userThemes: []
   };
   const S = {
-    ctx: null, messages: [], prefs: { ...DEFAULT_PREFS }, doc: null, docKey: '', loaded: false,
+    ctx: null, messages: [], prefs: { ...DEFAULT_PREFS }, doc: null, docKey: '', loaded: false, lastGood: {}, srcInfo: {},
     tab: 'cover', part: 0, width: 'pc', parts: [], images: {}, cacheText: {}, busy: false
   };
 
@@ -1020,7 +1045,7 @@
   function parseOpts(m) {
     return {
       mode: S.prefs.mode, cacheText: S.cacheText[m.key], charName: S.ctx.charName, userName: S.ctx.userName,
-      replacements: S.doc.replacements, override: S.doc.overrides[m.key]
+      replacements: S.doc.replacements, override: S.doc.overrides[m.key], otherImages: !!S.prefs.otherImages
     };
   }
 
@@ -1028,7 +1053,7 @@
   const parseCache = new Map();
   function parseCached(m) {
     const o = parseOpts(m);
-    const sig = [o.mode, o.cacheText || '', o.charName, o.userName, JSON.stringify(o.replacements || []), o.override == null ? '\u0000' : o.override].join('\u0001');
+    const sig = [o.otherImages ? 1 : 0, o.mode, o.cacheText || '', o.charName, o.userName, JSON.stringify(o.replacements || []), o.override == null ? '\u0000' : o.override].join('\u0001');
     const hit = parseCache.get(m.key);
     if (hit && hit.raw === m.raw && hit.sig === sig) return hit.parsed;
     const parsed = parseMessage(m.raw, o);
@@ -1063,10 +1088,19 @@
     return S.ctx.charImage ? 'charimg' : '';
   }
 
+  function findAsset(name) {
+    const m = S.ctx.assets;
+    if (m.has(name)) return m.get(name);
+    const strip = (x) => x.toLowerCase().replace(/\.(png|jpe?g|webp|gif|avif)$/i, '');
+    const want = strip(name);
+    for (const [k, v] of m) if (strip(k) === want) return v;
+    return null;
+  }
+
   async function sourceBlob(key) {
     if (key.startsWith('asset:')) {
       const name = key.slice(6);
-      const a = S.ctx.assets.get(name);
+      const a = findAsset(name);
       return a ? readAssetByPath(a.path, mimeOfExt(a.ext)) : readAssetByPath(name, 'image/png');
     }
     if (key.startsWith('custom:')) {
@@ -1099,17 +1133,40 @@
   }
 
   // 미리보기용 + 출력용 이미지를 키별로 캐시
+  const COVER_RATIOS = { orig: 0, '3:2': 3 / 2, '16:9': 16 / 9, '4:3': 4 / 3, '1:1': 1, '4:5': 4 / 5 };
+  // 키에 해당하는 인물 설정 (char / user / 추가 인물)
+  function castOf(key) {
+    if (key === 'portrait:char') return S.doc.cast.char;
+    if (key === 'portrait:user') return S.doc.cast.user;
+    if (key.startsWith('portrait:x')) return (S.doc.cast.extra || []).find((e) => 'portrait:' + e.id === key) || null;
+    return null;
+  }
+  // { aspect, crop } — 자르지 않으면 null
+  function cropSpec(key) {
+    if (key.startsWith('portrait:') && key !== 'portrait:char-full') {
+      const p = castOf(key);
+      return { aspect: 1, crop: { ...PORTRAIT_CROP, ...((p && p.crop) || {}) } };
+    }
+    if (key === 'cover') {
+      const a = COVER_RATIOS[S.doc.cover.ratio || 'orig'];
+      return a ? { aspect: a, crop: { x: 50, y: 50, zoom: 1, ...(S.doc.cover.crop || {}) } } : null;
+    }
+    return null;
+  }
+
   async function ensureImage(key, coverKey) {
     const real = key === 'cover' ? coverKey : key;
     if (!real) return null;
     const ck = imgCk(key, real);
     if (S.images[ck]) return S.images[ck];
-    const square = key.startsWith('portrait:') && key !== 'portrait:char-full' ? 240 : 0;
+    const spec = cropSpec(key);
+    const square = spec && spec.aspect === 1 && key.startsWith('portrait:') ? 256 : 0;
     const job = (async () => {
       const blob = await sourceBlob(real === 'charimg' && key === 'cover' ? 'charimg' : real);
       if (!blob) return { error: true };
       try {
-        const out = await encodeImage(blob, { maxW: S.prefs.maxW, quality: S.prefs.quality, square });
+        const out = await encodeImage(blob, { maxW: S.prefs.maxW, quality: S.prefs.quality, square, aspect: square ? 0 : (spec ? spec.aspect : 0), crop: spec ? spec.crop : null });
+        S.lastGood[key] = out.dataUrl;
         return { ...out, real };
       } catch (e) {
         return { error: true };
@@ -1127,7 +1184,32 @@
       const x = (S.doc.cast.extra || []).find((e) => 'portrait:' + e.id === key);
       extra = x ? (x.customId || '') + '/' + (x.asset || '') : '';
     }
-    return key + '|' + real + '|' + extra + '|' + S.prefs.maxW + '|' + S.prefs.quality;
+    const spec = cropSpec(key);
+    const c = spec ? [spec.aspect.toFixed(4), spec.crop.x, spec.crop.y, spec.crop.zoom].join(',') : '';
+    return key + '|' + real + '|' + extra + '|' + c + '|' + S.prefs.maxW + '|' + S.prefs.quality;
+  }
+
+  // 원본 이미지 (위치 조정 미리보기용)
+  async function loadSrcInfo(key, coverKey) {
+    const real = key === 'cover' ? coverKey : key;
+    if (!real) return null;
+    const sig = imgCk(key, real).split('|').slice(0, 3).join('|');
+    if (S.srcInfo[sig]) return S.srcInfo[sig];
+    const job = (async () => {
+      const blob = await sourceBlob(real);
+      if (!blob) return null;
+      try {
+        const img = await blobToImage(blob);
+        const cv = document.createElement('canvas');
+        const k = Math.min(1, 640 / Math.max(img.naturalWidth, img.naturalHeight));
+        cv.width = Math.round(img.naturalWidth * k); cv.height = Math.round(img.naturalHeight * k);
+        cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
+        return { url: cv.toDataURL('image/jpeg', 0.8), w: cv.width, h: cv.height };
+      } catch (e) { return null; }
+    })();
+    S.srcInfo[sig] = job;
+    S.srcInfo[sig] = await job;
+    return S.srcInfo[sig];
   }
 
   const imgCacheGet = (key, coverKey) => {
@@ -1156,14 +1238,14 @@
    * ======================================================= */
   const CSS = `
   *{box-sizing:border-box}
-  #fo{--bg:#111214;--bar:#16171a;--side:#141518;--panel:#1c1e22;--card:#17181b;--card2:#20232a;--field:#121316;
+  #fo{--focus:#c9a961;--hov:#7f9a8a;--bg:#111214;--bar:#16171a;--side:#141518;--panel:#1c1e22;--card:#17181b;--card2:#20232a;--field:#121316;
     --line:#26282c;--line2:#2e3136;--line3:#33363b;--tx:#e7e5e0;--tx2:#c9cbd0;--tx3:#9a9da3;--tx4:#6f7278;
     --stage:#0d0e10;--pri:#d8c69a;--onpri:#1a1a1a;--ok:#8fd1a8;--no:#e3b16b;--rc:#2b3a33;--rct:#a9d1bd;--ru:#2f3346;--rut:#b3bdf0;
     --barbg:#26292e;--barfg:#9fc3ad;--toast:#e7e5e0;--toastt:#111}
-  #fo.light{--bg:#f4f3ef;--bar:#ffffff;--side:#f7f6f2;--panel:#ffffff;--card:#faf9f6;--card2:#f1f0ea;--field:#ffffff;
-    --line:#e3e1db;--line2:#d9d6cf;--line3:#cfccc4;--tx:#23262a;--tx2:#3d4147;--tx3:#6c7077;--tx4:#9a9da3;
-    --stage:#e9e7e1;--pri:#3f5a4c;--onpri:#ffffff;--ok:#2f7d4f;--no:#b06a12;--rc:#e1ece5;--rct:#2f6047;--ru:#e4e7f6;--rut:#3a4790;
-    --barbg:#e6e4de;--barfg:#5d7466;--toast:#23262a;--toastt:#fff}
+  #fo.light{--bg:#f5f5f7;--bar:#ffffff;--side:#f5f5f7;--panel:#ffffff;--card:#fafafa;--card2:#f2f2f4;--field:#ffffff;
+    --line:#e5e5ea;--line2:#d9d9de;--line3:#cfcfd4;--tx:#1d1d1f;--tx2:#3a3a3c;--tx3:#6e6e73;--tx4:#a1a1a6;
+    --stage:#ececef;--pri:#1d1d1f;--onpri:#ffffff;--ok:#248a3d;--no:#b25000;--rc:#efeff2;--rct:#3a3a3c;--ru:#e8eefb;--rut:#2c5bb8;
+    --barbg:#e8e8ed;--barfg:#3a3a3c;--toast:#1d1d1f;--toastt:#fff;--focus:#2f6fde;--hov:#8e8e93}
   html,body{margin:0;height:100%;font:13px/1.5 -apple-system,BlinkMacSystemFont,'Pretendard','Noto Sans KR','Apple SD Gothic Neo',sans-serif}
   #fo{position:fixed;inset:0;display:flex;flex-direction:column;background:var(--bg);color:var(--tx)}
   .fo-top{display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--line);background:var(--bar)}
@@ -1234,11 +1316,21 @@
   .fo-sw-x{position:absolute;top:-6px;right:-6px;width:20px;height:20px;border-radius:50%;border:1px solid var(--line3);background:var(--panel);color:var(--tx3);font-size:10px;cursor:pointer;padding:0}
   .fo-color{flex:0 0 38px;height:32px;padding:2px;border:1px solid var(--line2);border-radius:7px;background:var(--field);cursor:pointer}
   .fo-adv summary{cursor:pointer;color:var(--tx3);font-size:12px;margin:6px 0}
+  .fo-crop{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin:6px 0 10px;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--card)}
+  .fo-crop-view{flex:0 0 auto;width:96px;height:96px;background:var(--line) no-repeat;box-shadow:inset 0 0 0 1px rgba(0,0,0,.06)}
+  .fo-crop-view[data-shape="circle"]{border-radius:50%}
+  .fo-crop-view[data-shape="rect"]{border-radius:8px;max-width:100%}
+  .fo-crop-view.empty{background:repeating-linear-gradient(45deg,var(--line) 0 6px,var(--card2) 6px 12px)}
+  .fo-crop-sls{flex:1 1 190px;min-width:0}
+  .fo-sl{margin:0 0 4px}
+  .fo-sl>label{flex:0 0 34px !important}
+  .fo-sl input[type=range]{flex:1;min-width:0;accent-color:var(--pri)}
+  .fo-slv{flex:0 0 44px;text-align:right;font-size:11.5px;color:var(--tx3);font-variant-numeric:tabular-nums}
   .fo-in.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px}
   .fo-rep{border:1px solid var(--line);border-radius:9px;padding:8px 8px 2px;margin:0 0 8px;background:var(--card)}
   #fo-frame.editing [data-fo]{outline:1px dashed rgba(127,140,133,.55);outline-offset:4px;border-radius:2px;cursor:text}
-  #fo-frame.editing [data-fo]:hover{outline-color:#7f9a8a}
-  #fo-frame.editing [data-fo]:focus{outline:2px solid #c9a961;outline-offset:4px}
+  #fo-frame.editing [data-fo]:hover{outline-color:var(--hov)}
+  #fo-frame.editing [data-fo]:focus{outline:2px solid var(--focus);outline-offset:4px}
   @media (max-width:820px){
     .fo-main{flex-direction:column}
     .fo-side{width:100%;height:52%;border-right:0;border-bottom:1px solid var(--line)}
@@ -1291,6 +1383,8 @@
         <div class="fo-sec"><h4>표지 이미지</h4>
         ${select('이미지', d + '.cover.image', [['auto', '첫 삽화 (없으면 캐릭터 이미지)'], ['char', '캐릭터 이미지'], ['custom', '직접 올린 이미지'], ['url', '이미지 주소'], ['none', '없음']])}
         ${S.doc.cover.image === 'url' ? field('주소', d + '.cover.imageUrl', 'https://...') : ''}
+        ${S.doc.cover.image !== 'none' ? select('비율', d + '.cover.ratio', [['orig', '원본 비율 (자르지 않음)'], ['3:2', '3:2 가로'], ['16:9', '16:9 와이드'], ['4:3', '4:3'], ['1:1', '1:1 정사각형'], ['4:5', '4:5 세로']]) : ''}
+        ${S.doc.cover.image !== 'none' && (S.doc.cover.ratio || 'orig') !== 'orig' ? cropControls(d + '.cover.crop', 'cover', 'rect') : ''}
         ${S.doc.cover.image === 'custom' ? `<div class="fo-row"><button class="fo-btn sm" data-act="up-cover">${S.doc.cover.customId ? '다른 이미지로 바꾸기' : '이미지 올리기'}</button>${S.doc.cover.customId ? '<span class="fo-ok">● 올림</span>' : ''}</div>` : ''}
         </div>
         <div class="fo-sec"><h4>마스트헤드</h4>
@@ -1302,10 +1396,10 @@
         <div class="fo-sec">${check('등장인물 섹션 표시', d + '.cast.on')}${check('유저 표시', d + '.cast.showUser')}</div>
         <div class="fo-sec"><h4>캐릭터</h4>
         ${field('이름', d + '.cast.char.name')}${field('태그', d + '.cast.char.tags', '쉼표로 구분')}
-        ${area('소개', d + '.cast.char.desc', '두 줄 정도의 짧은 소개')}${check('초상 표시', d + '.cast.char.portrait')}${portraitBtns('char', '캐릭터 아이콘')}</div>
+        ${area('소개', d + '.cast.char.desc', '두 줄 정도의 짧은 소개')}${check('초상 표시', d + '.cast.char.portrait')}${portraitBtns('char', '캐릭터 아이콘')}${S.doc.cast.char.portrait ? cropControls(d + '.cast.char.crop', 'portrait:char', 'circle') : ''}</div>
         <div class="fo-sec"><h4>유저</h4>
         ${field('이름', d + '.cast.user.name')}${field('태그', d + '.cast.user.tags', '쉼표로 구분')}
-        ${area('소개', d + '.cast.user.desc')}${check('초상 표시', d + '.cast.user.portrait')}${portraitBtns('user', '페르소나 이미지')}</div>
+        ${area('소개', d + '.cast.user.desc')}${check('초상 표시', d + '.cast.user.portrait')}${portraitBtns('user', '페르소나 이미지')}${S.doc.cast.user.portrait ? cropControls(d + '.cast.user.crop', 'portrait:user', 'circle') : ''}</div>
         ${extraCastHtml()}`;
       case 'chapters': return chaptersHtml();
       case 'style': return `
@@ -1396,12 +1490,44 @@
         ${field('이름', b + '.name')}${field('역할 라벨', b + '.role', 'CAST')}${field('태그', b + '.tags', '쉼표로 구분')}
         ${area('소개', b + '.desc')}${check('초상 표시', b + '.portrait')}
         ${assets.length ? select('에셋에서', b + '.asset', [['', '— 고르지 않음 —'], ...assets.map((n) => [n, n])]) : ''}
-        <div class="fo-row"><span class="fo-idx" style="flex:1">${x.customId ? '직접 올린 이미지 사용 중' : x.asset ? '에셋 이미지 사용 중' : '초상 이미지 없음'}</span><button class="fo-btn sm" data-act="up-x" data-i="${i}">이미지 올리기</button>${x.customId ? `<button class="fo-btn sm" data-act="reset-x" data-i="${i}">올린 이미지 지우기</button>` : ''}</div></div>`;
+        <div class="fo-row"><span class="fo-idx" style="flex:1">${x.customId ? '직접 올린 이미지 사용 중' : x.asset ? '에셋 이미지 사용 중' : '초상 이미지 없음'}</span><button class="fo-btn sm" data-act="up-x" data-i="${i}">이미지 올리기</button>${x.customId ? `<button class="fo-btn sm" data-act="reset-x" data-i="${i}">올린 이미지 지우기</button>` : ''}</div>${x.portrait && (x.customId || x.asset) ? cropControls(b + '.crop', 'portrait:' + x.id, 'circle') : ''}</div>`;
     });
     const left = castSlotsLeft();
     h += `<div class="fo-sec"><button class="fo-btn" data-act="cast-add" ${left <= 0 ? 'disabled' : ''}>+ 등장인물 추가</button>
       <div class="fo-hint">캐릭터·유저 포함 최대 ${CAST_MAX}명. ${left > 0 ? left + '명 더 추가할 수 있어요.' : '자리가 다 찼어요.'} 3명 이상이면 세 칸 배치로 바뀌어요.</div></div>`;
     return h;
+  }
+
+  // 위치 조정: X · Y · 줌 슬라이더와 바로 보이는 미리보기
+  function cropControls(base, key, shape) {
+    const c = { ...(key === 'cover' ? { x: 50, y: 50, zoom: 1 } : PORTRAIT_CROP), ...(getPath(S, base) || {}) };
+    const sl = (label, k, min, max, step, unit) => `<div class="fo-row fo-sl"><label>${label}</label><input type="range" min="${min}" max="${max}" step="${step}" value="${c[k]}" data-bind="${base}.${k}" data-crop="${esc(key)}"><span class="fo-slv">${k === 'zoom' ? Number(c[k]).toFixed(2) + '×' : Math.round(c[k]) + unit}</span></div>`;
+    return `<div class="fo-crop"><div class="fo-crop-view" data-cropview="${esc(key)}" data-shape="${shape}"></div><div class="fo-crop-sls">
+      ${sl('가로', 'x', 0, 100, 1, '%')}${sl('세로', 'y', 0, 100, 1, '%')}${sl('줌', 'zoom', 1, 4, 0.05, '')}
+      <button class="fo-btn sm" data-cropreset="${esc(base)}">위치 초기화</button></div></div>`;
+  }
+
+  async function paintCropView(el) {
+    const key = el.dataset.cropview;
+    const model = buildModel();
+    const info = await loadSrcInfo(key, resolveCoverKey(model));
+    if (!el.isConnected) return;
+    if (!info) { el.style.backgroundImage = ''; el.classList.add('empty'); return; }
+    el.classList.remove('empty');
+    const spec = cropSpec(key) || { aspect: info.w / info.h, crop: { x: 50, y: 50, zoom: 1 } };
+    const D = el.dataset.shape === 'circle' ? 96 : 240;
+    const W = D, H = Math.round(D / spec.aspect);
+    el.style.width = W + 'px'; el.style.height = H + 'px';
+    const r = cropRect(info.w, info.h, spec.aspect, spec.crop);
+    const k = W / r.sw;
+    el.style.backgroundImage = `url("${info.url}")`;
+    el.style.backgroundSize = `${info.w * k}px ${info.h * k}px`;
+    el.style.backgroundPosition = `${-r.sx * k}px ${-r.sy * k}px`;
+  }
+
+  function paintCropViews() {
+    if (!root) return;
+    root.querySelectorAll('[data-cropview]').forEach((el) => { paintCropView(el); });
   }
 
   function portraitBtns(who, def) {
@@ -1444,7 +1570,14 @@
     const keys = list.map((x) => x.key);
     const map = S.doc.urlMap;
     const missing = list.filter((x) => !map[x.uk]).length;
-    let h = `<div class="fo-sec"><h4>이미지 품질</h4>
+    let hiddenN = 0;
+    for (const m of selectedMessages()) hiddenN += parseCached(m).hidden || 0;
+    let h = `<div class="fo-sec"><h4>넣을 이미지</h4>
+      ${check('에셋메이드 외 이미지도 표시', 'prefs.otherImages')}
+      <div class="fo-hint">캐릭터 에셋·감정 이미지({{img::}} {{emotion::}} 등), 메시지 속 일반 이미지, 채팅에 첨부한 이미지예요. 끄면 에셋메이드 삽화와 직접 추가한 이미지만 들어가요.</div>
+      ${!S.prefs.otherImages && hiddenN ? `<div class="fo-warn">지금 범위에서 ${hiddenN}장이 숨겨져 있어요.</div>` : ''}
+      </div>
+      <div class="fo-sec"><h4>이미지 품질</h4>
       <div class="fo-hint">리치 복사는 이미지를 함께 복사해서 아카가 자동으로 업로드해요. 따로 연결할 필요 없어요.</div>
       ${field('최대 폭(px)', 'prefs.maxW', '960', 'number')}
       ${select('화질', 'prefs.quality', [['0.8', '보통 (가벼움)'], ['0.86', '좋음'], ['0.92', '아주 좋음 (무거움)']])}
@@ -1538,6 +1671,7 @@
     const top = panel.scrollTop;
     panel.innerHTML = panelHtml();
     panel.scrollTop = top;
+    paintCropViews();
   }
 
   function renderViewBar() {
@@ -1571,7 +1705,7 @@
       const uk = urlKeyOf(key, coverKey);
       if (forOutput === true && S.prefs.imageMode === 'url') return directUrl(uk) || S.doc.urlMap[uk] || '';
       const c = imgCacheGet(key, coverKey);
-      return c ? c.dataUrl : (directUrl(uk) || '');
+      return c ? c.dataUrl : (forOutput === false && S.lastGood[key]) || directUrl(uk) || '';
     };
     const o = { ...S.prefs, names: { user: S.doc.cast.user.name || S.ctx.userName || 'USER', char: S.doc.cast.char.name || S.ctx.charName || 'CHAR' }, themeObj: resolveTheme(), mark: forOutput === false && !!S.editing, captions: S.doc.captions || {}, limit: S.prefs.split ? (Number(S.prefs.limit) || 60000) : Infinity, thumbnail: !!(forOutput === true && S.prefs.thumbnail && S.prefs.imageMode === 'url') };
     return { parts: renderDocument(model, S.doc, o, srcOf), model, coverKey };
@@ -1987,7 +2121,7 @@
 
   function bindEvents() {
     root.addEventListener('click', (e) => {
-      const t = e.target.closest('[data-tab],[data-act],[data-part],[data-width],[data-copy],[data-src],[data-save],[data-edit],[data-addimg],[data-theme],[data-utdel]');
+      const t = e.target.closest('[data-tab],[data-act],[data-part],[data-width],[data-copy],[data-src],[data-save],[data-edit],[data-addimg],[data-theme],[data-utdel],[data-cropreset]');
       if (!t) return;
       const ds = t.dataset;
       if (ds.tab) { S.tab = ds.tab; renderPanel(); return; }
@@ -1998,6 +2132,7 @@
       if (ds.save != null) { doCopy(+ds.save, 'save'); return; }
       if (ds.edit) { editMessage(ds.edit); return; }
       if (ds.addimg) { addImageDialog(ds.addimg); return; }
+      if (ds.cropreset) { setPath(S, ds.cropreset, null); changed(true); return; }
       if (ds.utdel) {
         S.prefs.userThemes = (S.prefs.userThemes || []).filter((u) => u.id !== ds.utdel);
         if (S.prefs.theme === 'u:' + ds.utdel) S.prefs.theme = 'sage';
@@ -2032,9 +2167,9 @@
           changed(true);
           break;
         }
-        case 'up-cover': uploadSingle((id) => { S.doc.cover.customId = id; S.doc.cover.image = 'custom'; }); break;
-        case 'up-char': uploadSingle((id) => { S.doc.cast.char.customId = id; S.doc.cast.char.portrait = true; }); break;
-        case 'up-user': uploadSingle((id) => { S.doc.cast.user.customId = id; S.doc.cast.user.portrait = true; }); break;
+        case 'up-cover': uploadSingle((id) => { S.doc.cover.customId = id; S.doc.cover.image = 'custom'; S.doc.cover.crop = null; }); break;
+        case 'up-char': uploadSingle((id) => { S.doc.cast.char.customId = id; S.doc.cast.char.portrait = true; S.doc.cast.char.crop = null; }); break;
+        case 'up-user': uploadSingle((id) => { S.doc.cast.user.customId = id; S.doc.cast.user.portrait = true; S.doc.cast.user.crop = null; }); break;
         case 'cast-add':
           if (castSlotsLeft() > 0) {
             S.doc.cast.extra.push({ id: 'x' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), name: '', role: 'CAST', tags: '', desc: '', portrait: true, asset: '', customId: '' });
@@ -2047,7 +2182,7 @@
           if (ex[j]) { [ex[i], ex[j]] = [ex[j], ex[i]]; changed(true); }
           break;
         }
-        case 'up-x': { const i = +ds.i; uploadSingle((id) => { S.doc.cast.extra[i].customId = id; S.doc.cast.extra[i].portrait = true; }); break; }
+        case 'up-x': { const i = +ds.i; uploadSingle((id) => { S.doc.cast.extra[i].customId = id; S.doc.cast.extra[i].portrait = true; S.doc.cast.extra[i].crop = null; }); break; }
         case 'reset-x': S.doc.cast.extra[+ds.i].customId = ''; changed(true); break;
         case 'reset-char': S.doc.cast.char.customId = ''; changed(true); break;
         case 'reset-user': S.doc.cast.user.customId = ''; changed(true); break;
@@ -2059,12 +2194,20 @@
       if (el.dataset.bind) {
         const path = el.dataset.bind;
         let v = el.type === 'checkbox' ? el.checked : el.value;
-        if (el.type === 'number') v = Number(v) || 0;
+        if (el.type === 'number' || el.type === 'range') v = Number(v) || 0;
         if (path === 'prefs.maxW') v = clamp(v || 960, 320, 2000);
         if (path === 'prefs.quality') v = clamp(Number(v) || 0.86, 0.5, 0.98);
         setPath(S, path, v);
         if (path.startsWith('doc.chapters.')) { const k = path.split('.')[2]; S.doc.chapters[k].on = true; }
         if (path.startsWith('prefs.custom.') && el.type !== 'color') { v = String(v).trim(); if (v && !v.startsWith('#') && /^[0-9a-f]{3,6}$/i.test(v)) v = '#' + v; setPath(S, path, v); }
+        if (el.dataset.crop != null) {
+          // 움직이는 동안은 패널 미리보기만, 손을 떼면 본문에 반영
+          const out = el.parentElement.querySelector('.fo-slv');
+          if (out) out.textContent = path.endsWith('.zoom') ? v.toFixed(2) + '×' : Math.round(v) + '%';
+          root.querySelectorAll('[data-cropview]').forEach((x) => { if (x.dataset.cropview === el.dataset.crop) paintCropView(x); });
+          if (e.type === 'change') changed(false);
+          return;
+        }
         const structural = el.tagName === 'SELECT' || el.type === 'checkbox' || el.type === 'color' || path.startsWith('doc.range') || path.startsWith('doc.replacements') || path.startsWith('prefs.custom.');
         if (path === 'prefs.mode') loadTranslationCache().then(() => changed(true));
         else changed(structural && e.type === 'change');
