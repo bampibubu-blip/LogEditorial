@@ -1,13 +1,13 @@
 //@name LogEditorial
-//@display-name 🗃️ Log Editorial 1.2.0
+//@display-name 🗃️ Log Editorial 1.2.1
 //@api 3.0
-//@version 1.2.0
+//@version 1.2.1
 //@update-url https://raw.githubusercontent.com/bampibubu-blip/LogEditorial/main/LogEditorial.js
 //@description 에셋메이드 삽화가 들어간 채팅 로그를 아카라이브용 에디토리얼 HTML로 만듭니다.
 (async () => {
   'use strict';
 
-  const VERSION = '1.2.0';
+  const VERSION = '1.2.1';
   const NAME = 'Log Editorial';
   // 저장소 키 (정식 출시 전 'folio:' 키로 저장된 설정도 읽어옴)
   const KEY = 'logeditorial:', LEGACY = 'folio:';
@@ -197,7 +197,12 @@
 
   function imageFromImgTag(tag) {
     const asset = attr(tag, 'data-am-asset');
-    const src = attr(tag, 'src');
+    let src = attr(tag, 'src');
+    if (!src) {
+      // <img="이름">, <img=이름>, <img::이름> 같은 리스 단축 문법
+      const m = tag.match(/^<(?:p|c)?img\s*(?:=|::?)\s*["']?([^"'>]+?)["']?\s*\/?>$/i) || tag.match(/\bsrc\s*=\s*([^\s>"']+)/i);
+      if (m) src = decodeEntities(m[1].trim());
+    }
     const w = parseInt(attr(tag, 'width'), 10) || 0;
     const h = parseInt(attr(tag, 'height'), 10) || 0;
     const raw = src.match(/^\{\{\s*raw::([\s\S]+?)\}\}$/i);
@@ -206,6 +211,11 @@
     if (raw) { const name = raw[1].trim(); return { kind: 'asset', name, w, h, am: am || isAmAsset(name) }; }
     if (/^(https?:)?\/\//i.test(src)) return { kind: 'url', src, w, h, am };
     if (/^data:image\//i.test(src)) return { kind: 'url', src, w, h, am };
+    // <img src="yegor_curious"> 처럼 에셋 이름만 적은 경우 (리스가 캐릭터 에셋으로 바꿔 보여 줌)
+    if (src && !/[\s<>{}"']/.test(src) && !/^[a-z][a-z0-9+.-]*:/i.test(src)) {
+      const name = src.replace(/^\.?\//, '');
+      return { kind: 'asset', name, w, h, am: am || isAmAsset(name) };
+    }
     return null;
   }
 
@@ -248,7 +258,7 @@
     }
     s = out + s.slice(pos);
     // 남은 일반 이미지
-    s = s.replace(/<img\b[^>]*>/gi, (tag) => token(imageFromImgTag(tag)));
+    s = s.replace(/<(?:p|c)?img\b[^>]*>/gi, (tag) => token(imageFromImgTag(tag)));
     // 사용자 첨부 이미지
     s = s.replace(/\{\{\s*inlay(?:ed)?::([a-f0-9-]+)\s*\}\}/gi, (_, id) => token({ kind: 'inlay', id, w: 0, h: 0, am: false }));
     // 리스 에셋 매크로 (캐릭터 에셋 · 감정 이미지). 기존 편집본의 번호가 밀리지 않게 맨 마지막에 번호를 매김
@@ -342,13 +352,15 @@
       line = line.replace(/\u2063IMG\d+\u2063/g, '').trim();
       if (!line) continue;
       if (SCENE_BREAK.test(line)) { blocks.push({ type: 'break' }); continue; }
+      const hm = line.match(/^(#{1,6})\s+(.+?)\s*#*$/);
+      if (hm) { blocks.push({ type: 'h', level: hm[1].length, text: hm[2] }); continue; }
       blocks.push({ type: 'p', text: line, dialogue: DIALOGUE_START.test(line) });
     }
     return { blocks, images: ex.images, hasTranslation: !!langs, hidden };
   }
 
   // 블록 → 편집용 줄 (이미지는 ⟦삽화:n⟧ / ⟦이미지:id⟧)
-  const blockLine = (b) => (b.type === 'img' ? b.token : b.type === 'break' ? '* * *' : b.text);
+  const blockLine = (b) => (b.type === 'img' ? b.token : b.type === 'break' ? '* * *' : b.type === 'h' ? '#'.repeat(b.level) + ' ' + b.text : b.text);
   const blocksToText = (blocks) => blocks.map(blockLine).join('\n\n');
   function blocksToEditable(raw, opts) {
     return blocksToText(parseMessage(raw, { ...opts, otherImages: true }).blocks);
@@ -575,10 +587,14 @@
           units.push({ kind: 'p', ch, msg: m.key, role, muted, bi, b, drop: firstPara && o.dropCap && !b.dialogue && canDrop });
           firstPara = false;
         } else if (b.type === 'img') {
-          plateNum++;
-          units.push({ kind: 'img', ch, msg: m.key, role, key: b.key, num: plateNum });
+          // 감정 이미지 같은 에셋메이드 외 이미지는 삽화 번호를 매기지 않음
+          const other = b.img && b.img.am === false && o.otherSize !== 'full';
+          if (!other) plateNum++;
+          units.push({ kind: 'img', ch, msg: m.key, role, key: b.key, num: plateNum, other });
         } else if (b.type === 'break') {
           units.push({ kind: 'break', ch, msg: m.key, role });
+        } else if (b.type === 'h' && o.headings !== 'hide') {
+          units.push({ kind: 'h', ch, msg: m.key, role, b });
         }
       });
     }
@@ -599,7 +615,17 @@
     if (u.kind === 'p' && u.muted) return renderParagraph(u.b, mutedTheme(t), o, false, fo('p', { msg: u.msg, bi: u.bi })).replace('style="', 'style="padding-left:1.4em;');
     if (u.kind === 'p') return renderParagraph(u.b, t, o, u.drop, fo('p', { msg: u.msg, bi: u.bi }));
     if (u.kind === 'label') return u.html;
+    if (u.kind === 'img' && u.other) {
+      const src = srcOf(u.key);
+      if (!src) return '';
+      const hpx = o.otherSize === 'small' ? 200 : 320;
+      return `<div style="clear:both;margin:28px 0 28px 0;line-height:0;font-size:0;text-align:center;"><img src="${escUrl(src)}" alt="" style="width:auto;height:auto;max-width:100%;max-height:${hpx}px;display:inline-block;margin:0 auto;border-radius:12px;"></div>`;
+    }
     if (u.kind === 'img') return renderPlate(srcOf(u.key), u.num, t, o, u.key);
+    if (u.kind === 'h') {
+      const big = u.b.level <= 2;
+      return `<div style="clear:both;margin:${big ? 40 : 32}px 0 16px 0;${HF}font-size:${big ? 18 : 16.5}px;line-height:1.5;font-weight:600;color:${t.head};word-break:keep-all;">${inlineFormat(u.b.text, t, o.dlgStyle, false)}</div>`;
+    }
     if (u.kind === 'break') return `<div style="text-align:center;margin:8px 0 28px 0;font-size:12px;letter-spacing:0.5em;color:${t.faint};">· ✦ ·</div>`;
     if (u.kind === 'quote') return u.html;
     return '';
@@ -928,8 +954,31 @@
     }
   };
 
+  // 에셋 이름 색인
+  const noExt = (x) => String(x).replace(/\.[^./]+$/, '');
+  function buildAssetIndex(m) {
+    const lower = {}, bare = {}, prefix = {};
+    const addP = (k, name) => { if (k) (prefix[k] = prefix[k] || []).includes(name) || prefix[k].push(name); };
+    for (const name of m.keys()) {
+      const l = name.toLowerCase(), b = noExt(l);
+      lower[l] = lower[l] || name;
+      bare[b] = bare[b] || name;
+      // yegor_confused_1 → yegor_confused, yegor 로도 찾을 수 있게
+      for (let i = 1; i < b.length; i++) if (b[i] === '_' || b[i] === '-') addP(b.slice(0, i), name);
+      const num = b.match(/^(.+?)[_-]?\d+$/);
+      if (num) addP(num[1], name);
+    }
+    return { lower, bare, prefix };
+  }
+  function assetKeyOf(name, ix) {
+    const n = String(name || '').trim().replace(/^\.?\//, '').replace(/^assets\//i, '');
+    if (!n) return '';
+    const l = n.toLowerCase(), b = noExt(l);
+    return ix.lower[l] || ix.lower[b] || ix.bare[l] || ix.bare[b] || ((ix.prefix[l] || ix.prefix[b] || [])[0]) || '';
+  }
+
   if (TEST) {
-    globalThis.__LOGEDITORIAL__ = { cropRect, deriveTheme, contrast, THEME_ORDER, extractImages, parseMessage, renderDocument, splitParts, extractArcaUrls, makeZip, crc32, THEMES, blocksToEditable, blocksToText, visibleLength, applyReplacements };
+    globalThis.__LOGEDITORIAL__ = { buildAssetIndex, assetKeyOf, imageFromImgTag, cropRect, deriveTheme, contrast, THEME_ORDER, extractImages, parseMessage, renderDocument, splitParts, extractArcaUrls, makeZip, crc32, THEMES, blocksToEditable, blocksToText, visibleLength, applyReplacements };
     return;
   }
   if (!R) { console.error(NAME + ': RisuAI 플러그인 API를 찾지 못했습니다.'); return; }
@@ -940,7 +989,7 @@
   const DEFAULT_PREFS = {
     theme: 'sage', dlgStyle: 'marker', dropCap: true, toggle: 'first', mode: 'original', plateCaption: true,
     masthead: true, imageMode: 'url', maxW: 960, quality: 0.86, limit: 60000, thumbnail: true, includeGreeting: true,
-    split: true, ui: 'auto', recentN: 30, font: 'serif', plateLabel: 'PLATE {n}', userStyle: 'none', hideUser: false, credit: true, otherImages: false,
+    split: true, ui: 'auto', recentN: 30, font: 'serif', plateLabel: 'PLATE {n}', userStyle: 'none', hideUser: false, credit: true, otherImages: false, otherSize: 'mid', headings: 'sub',
     custom: { mat: '#e8e6df', sheet: '#fbfaf6', ink: '#2a2f2b', accent: '#5d7466', dlg: '', head: '', overrides: {} }, userThemes: []
   };
   const S = {
@@ -976,15 +1025,23 @@
     try { chat = await R.getChatFromIndex(charIdx, chatIdx); } catch (e) { /* 무시 */ }
     if (!chat && char && char.chats) chat = char.chats[chatIdx];
     if (!char || !chat) throw new Error('캐릭터 또는 채팅 데이터를 읽지 못했습니다.');
-    let persona = null;
+    let persona = null, db = null;
     try {
-      const db = await R.getDatabase(['personas', 'selectedPersona']);
+      db = await R.getDatabase(['personas', 'selectedPersona', 'modules', 'enabledModules', 'moduleIntergration']);
       const list = (db && db.personas) || [];
       persona = (chat.bindedPersona && list.find((p) => p.id === chat.bindedPersona)) || list[db && db.selectedPersona] || null;
     } catch (e) { /* 페르소나 없이 진행 */ }
+    // 이미지 이름 → 파일: 캐릭터 에셋 > 감정 이미지 > 켜진 모듈 > 나머지 모듈 순으로 찾음
     const assets = new Map();
-    for (const a of char.additionalAssets || []) if (Array.isArray(a) && a[0]) assets.set(String(a[0]), { path: a[1], ext: a[2] });
-    for (const a of char.emotionImages || []) if (Array.isArray(a) && a[0] && !assets.has(a[0])) assets.set(String(a[0]), { path: a[1], ext: '' });
+    const addAsset = (a) => { if (Array.isArray(a) && a[0] && !assets.has(String(a[0]))) assets.set(String(a[0]), { path: a[1], ext: a[2] || '' }); };
+    (char.additionalAssets || []).forEach(addAsset);
+    (char.emotionImages || []).forEach(addAsset);
+    const mods = (db && Array.isArray(db.modules)) ? db.modules : [];
+    const on = new Set([...(db && db.enabledModules) || [], ...(char.modules || []), ...(chat.modules || []),
+      ...String((db && db.moduleIntergration) || '').split(',').map((x) => x.trim()).filter(Boolean)]);
+    const isOn = (m) => m && (on.has(m.id) || (m.namespace && on.has(m.namespace)));
+    mods.filter(isOn).forEach((m) => (m.assets || []).forEach(addAsset));
+    mods.filter((m) => !isOn(m)).forEach((m) => (m.assets || []).forEach(addAsset));
     const msgs = [];
     const greetings = [char.firstMessage, ...(char.alternateGreetings || [])];
     const greet = greetings[chat.fmIndex >= 0 ? chat.fmIndex + 1 : 0] ?? char.firstMessage;
@@ -993,7 +1050,7 @@
       msgs.push({ key: String(m.chatId || 'i' + i).replace(/[.\s]/g, '_'), role: m.role === 'user' ? 'user' : 'char', raw: String(m.data || '') });
     });
     return {
-      charIdx, chatIdx, char, chat, persona, assets,
+      charIdx, chatIdx, char, chat, persona, assets, assetIndex: buildAssetIndex(assets),
       charName: char.name || '', userName: (persona && persona.name) || '',
       charImage: char.image || '', userImage: (persona && persona.icon) || '',
       chatKey: KEY + 'doc:' + (char.chaId || charIdx) + ':' + (chat.id || chatIdx),
@@ -1089,12 +1146,9 @@
   }
 
   function findAsset(name) {
-    const m = S.ctx.assets;
-    if (m.has(name)) return m.get(name);
-    const strip = (x) => x.toLowerCase().replace(/\.(png|jpe?g|webp|gif|avif)$/i, '');
-    const want = strip(name);
-    for (const [k, v] of m) if (strip(k) === want) return v;
-    return null;
+    const m = S.ctx.assets, ix = S.ctx.assetIndex || buildAssetIndex(m);
+    const key = assetKeyOf(name, ix);
+    return key ? m.get(key) : null;
   }
 
   async function sourceBlob(key) {
@@ -1407,6 +1461,7 @@
         <div class="fo-sec"><h4>글자</h4>
         ${select('서체', p + '.font', Object.entries(FONT_MODES))}
         ${S.prefs.font !== 'serif' ? '<div class="fo-hint">프리텐다드는 읽는 사람 기기에 없으면 기본 고딕체로 보여요.</div>' : ''}
+        ${select('본문 속 #제목', p + '.headings', [['sub', '소제목으로 표시'], ['hide', '숨기기']])}
         ${select('대사 표시', p + '.dlgStyle', [['marker', '형광펜 밑줄'], ['color', '글자색만'], ['tint', '옅은 하이라이트']])}
         ${check('챕터 첫 글자 크게 (드롭캡)', p + '.dropCap')}
         </div>
@@ -1575,6 +1630,7 @@
     let h = `<div class="fo-sec"><h4>넣을 이미지</h4>
       ${check('에셋메이드 외 이미지도 표시', 'prefs.otherImages')}
       <div class="fo-hint">캐릭터 에셋·감정 이미지({{img::}} {{emotion::}} 등), 메시지 속 일반 이미지, 채팅에 첨부한 이미지예요. 끄면 에셋메이드 삽화와 직접 추가한 이미지만 들어가요.</div>
+      ${S.prefs.otherImages ? select('크기', 'prefs.otherSize', [['small', '작게 (높이 200px까지)'], ['mid', '중간 (높이 320px까지)'], ['full', '삽화처럼 본문 폭에 맞춤']]) + '<div class="fo-hint">작게·중간은 원래 크기를 넘겨 키우지 않고, 삽화 번호도 매기지 않아요.</div>' : ''}
       ${!S.prefs.otherImages && hiddenN ? `<div class="fo-warn">지금 범위에서 ${hiddenN}장이 숨겨져 있어요.</div>` : ''}
       </div>
       <div class="fo-sec"><h4>이미지 품질</h4>
@@ -1600,9 +1656,11 @@
     h += `<div class="fo-sec"><h4>사용되는 이미지</h4>`;
     keys.forEach((k, i) => {
       const prev = imgCacheGet(k, coverKey);
+      const st = S.images[imgCk(k, k === 'cover' ? coverKey : k)];
+      const missing = st && !(st instanceof Promise) && st.error;
       const uk = urlKeyOf(k, coverKey);
       const label = k === 'cover' ? '표지' : k === 'portrait:char' ? '캐릭터 초상' : k === 'portrait:user' ? '유저 초상' : '삽화';
-      h += `<div class="fo-img"><img src="${prev ? prev.dataUrl : ''}" alt=""><div class="meta"><div><b>${pad2(i + 1)}</b> ${label} ${S.prefs.imageMode === 'url' ? (map[uk] ? '<span class="fo-ok">● 연결됨</span>' : '<span class="fo-no">● 미연결</span>') : ''}</div>
+      h += `<div class="fo-img"><img src="${prev ? prev.dataUrl : ''}" alt=""><div class="meta"><div><b>${pad2(i + 1)}</b> ${label} ${missing ? '<span class="fo-no">● 파일을 찾지 못함</span>' : ''} ${S.prefs.imageMode === 'url' ? (map[uk] ? '<span class="fo-ok">● 연결됨</span>' : '<span class="fo-no">● 미연결</span>') : ''}</div>
         <div class="nm">${esc(k === 'cover' ? coverKey : k)}</div>
         ${S.prefs.imageMode === 'url' ? `<input class="fo-in" data-url="${esc(uk)}" value="${esc(map[uk] || '')}" placeholder="아카 이미지 주소" style="width:100%;margin-top:4px">` : ''}</div></div>`;
     });
