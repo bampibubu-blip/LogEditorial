@@ -1,13 +1,13 @@
 //@name LogEditorial
-//@display-name 🗃️ Log Editorial 1.2.1
+//@display-name 🗃️ Log Editorial 1.2.4
 //@api 3.0
-//@version 1.2.1
+//@version 1.2.4
 //@update-url https://raw.githubusercontent.com/bampibubu-blip/LogEditorial/main/LogEditorial.js
 //@description 에셋메이드 삽화가 들어간 채팅 로그를 아카라이브용 에디토리얼 HTML로 만듭니다.
 (async () => {
   'use strict';
 
-  const VERSION = '1.2.1';
+  const VERSION = '1.2.4';
   const NAME = 'Log Editorial';
   // 저장소 키 (정식 출시 전 'folio:' 키로 저장된 설정도 읽어옴)
   const KEY = 'logeditorial:', LEGACY = 'folio:';
@@ -266,6 +266,46 @@
     return { text: s, images };
   }
 
+  // 봇의 표시용 정규식(editdisplay) 중 이미지를 만드는 것만 적용.
+  // 일치한 부분은 정규식이 만든 이미지로 바꾸고, 그 밖의 꾸밈 HTML은 버림
+  const IMG_OUT = /\{\{\s*(?:img|image|asset|emotion|raw|path)\s*::|<(?:p|c)?img\b|\bsrc\s*=/i;
+  function compileImageScripts(list) {
+    const out = [];
+    for (const sc of list || []) {
+      if (!sc || typeof sc.in !== 'string' || !sc.in || typeof sc.out !== 'string') continue;
+      if (String(sc.type || 'editinput').toLowerCase() !== 'editdisplay' || !IMG_OUT.test(sc.out)) continue;
+      let flags = sc.ableFlag ? String(sc.flag || 'g').replace(/<[^>]*>/g, '').replace(/[^gimsuy]/g, '') : 'g';
+      if (!flags.includes('g')) flags += 'g';
+      try { out.push({ re: new RegExp(sc.in, [...new Set(flags)].join('')), out: sc.out }); } catch (e) { /* 잘못된 정규식 */ }
+    }
+    return out;
+  }
+  function applyImageScripts(text, scripts) {
+    for (const sc of scripts || []) {
+      try {
+        sc.re.lastIndex = 0;
+        text = text.replace(sc.re, (...args) => {
+          const full = args[0];
+          let end = args.length - 1;
+          if (typeof args[end] === 'object' && args[end] !== null) end--;
+          const groups = args.slice(1, end - 1);
+          const out = sc.out.replace(/\$(\d{1,2}|&)/g, (m, g) => (g === '&' ? full : String(groups[+g - 1] ?? '')));
+          const refs = out.match(/<(?:p|c)?img\b[^>]*>|\{\{\s*(?:img|image|asset|emotion)\s*::\s*[^{}]+?\}\}|url\(\s*(?:&quot;|["'])?\s*(?:\{\{\s*(?:raw|path)\s*::\s*[^{}]+?\}\}|https?:\/\/[^"')\s]+)\s*(?:&quot;|["'])?\s*\)/gi) || [];
+          if (!refs.length) return full;
+          const imgs = refs.map((r) => {
+            if (r[0] === '<') return r;
+            const u = r.match(/^url\(\s*(?:&quot;|["'])?\s*(.+?)\s*(?:&quot;|["'])?\s*\)$/i);
+            if (u) return /^https?:/i.test(u[1]) ? '<img src="' + u[1] + '">' : '<img src="' + u[1] + '">';
+            return '<img src="{{raw::' + r.replace(/^\{\{\s*\w+\s*::\s*|\s*\}\}$/g, '').trim() + '}}">';
+          }).join('\n');
+          // 긴 블록(상태창 등)은 글을 살리고 이미지를 뒤에 붙임
+          return full.length > 300 ? full + '\n' + imgs + '\n' : '\n' + imgs + '\n';
+        });
+      } catch (e) { /* 이 정규식은 건너뜀 */ }
+    }
+    return text;
+  }
+
   const stripHidden = (s) => String(s || '')
     .replace(/<Thoughts>[\s\S]*?<\/Thoughts>/gi, '')
     .replace(/\[LBDATA START\][\s\S]*?\[LBDATA END\]/gi, '');
@@ -313,7 +353,7 @@
    * opts: { mode, cacheText, charName, userName, replacements, override }
    */
   function parseMessage(raw, opts = {}) {
-    const ex = extractImages(stripHidden(raw));
+    const ex = extractImages(applyImageScripts(stripHidden(raw), opts.imageScripts));
     let text = ex.text;
     const langs = splitLanguages(text);
     if (langs) {
@@ -968,17 +1008,32 @@
       const num = b.match(/^(.+?)[_-]?\d+$/);
       if (num) addP(num[1], name);
     }
-    return { lower, bare, prefix };
+    return { lower, bare, prefix, bareList: Object.keys(bare) };
+  }
+  function editDistance(a, b) {
+    if (Math.abs(a.length - b.length) > 3) return 99;
+    let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+    for (let i = 1; i <= a.length; i++) {
+      const cur = [i];
+      for (let j = 1; j <= b.length; j++) cur[j] = Math.min(prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1), prev[j] + 1, cur[j - 1] + 1);
+      prev = cur;
+    }
+    return prev[b.length];
   }
   function assetKeyOf(name, ix) {
     const n = String(name || '').trim().replace(/^\.?\//, '').replace(/^assets\//i, '');
     if (!n) return '';
     const l = n.toLowerCase(), b = noExt(l);
-    return ix.lower[l] || ix.lower[b] || ix.bare[l] || ix.bare[b] || ((ix.prefix[l] || ix.prefix[b] || [])[0]) || '';
+    const hit = ix.lower[l] || ix.lower[b] || ix.bare[l] || ix.bare[b] || ((ix.prefix[l] || ix.prefix[b] || [])[0]) || '';
+    if (hit || b.length < 4) return hit;
+    // 마지막으로 철자가 조금 다른 이름 (2글자 이내)
+    let best = '', bd = 3;
+    for (const k of ix.bareList || []) { const d = editDistance(b, k); if (d < bd) { bd = d; best = k; } }
+    return best ? ix.bare[best] : '';
   }
 
   if (TEST) {
-    globalThis.__LOGEDITORIAL__ = { buildAssetIndex, assetKeyOf, imageFromImgTag, cropRect, deriveTheme, contrast, THEME_ORDER, extractImages, parseMessage, renderDocument, splitParts, extractArcaUrls, makeZip, crc32, THEMES, blocksToEditable, blocksToText, visibleLength, applyReplacements };
+    globalThis.__LOGEDITORIAL__ = { compileImageScripts, applyImageScripts, buildAssetIndex, assetKeyOf, imageFromImgTag, cropRect, deriveTheme, contrast, THEME_ORDER, extractImages, parseMessage, renderDocument, splitParts, extractArcaUrls, makeZip, crc32, THEMES, blocksToEditable, blocksToText, visibleLength, applyReplacements };
     return;
   }
   if (!R) { console.error(NAME + ': RisuAI 플러그인 API를 찾지 못했습니다.'); return; }
@@ -989,7 +1044,7 @@
   const DEFAULT_PREFS = {
     theme: 'sage', dlgStyle: 'marker', dropCap: true, toggle: 'first', mode: 'original', plateCaption: true,
     masthead: true, imageMode: 'url', maxW: 960, quality: 0.86, limit: 60000, thumbnail: true, includeGreeting: true,
-    split: true, ui: 'auto', recentN: 30, font: 'serif', plateLabel: 'PLATE {n}', userStyle: 'none', hideUser: false, credit: true, otherImages: false, otherSize: 'mid', headings: 'sub',
+    split: true, ui: 'auto', recentN: 30, font: 'serif', plateLabel: 'PLATE {n}', userStyle: 'none', hideUser: false, credit: true, otherImages: true, otherImagesV: 2, otherSize: 'mid', headings: 'sub',
     custom: { mat: '#e8e6df', sheet: '#fbfaf6', ink: '#2a2f2b', accent: '#5d7466', dlg: '', head: '', overrides: {} }, userThemes: []
   };
   const S = {
@@ -1042,6 +1097,17 @@
     const isOn = (m) => m && (on.has(m.id) || (m.namespace && on.has(m.namespace)));
     mods.filter(isOn).forEach((m) => (m.assets || []).forEach(addAsset));
     mods.filter((m) => !isOn(m)).forEach((m) => (m.assets || []).forEach(addAsset));
+    const rawScripts = [...(char.customscript || []), ...mods.filter(isOn).flatMap((m) => m.regex || [])];
+    const imageScripts = compileImageScripts(rawScripts);
+    const diag = {
+      charAssets: Array.isArray(char.additionalAssets) ? char.additionalAssets.length : (char.additionalAssets === undefined ? 'none' : typeof char.additionalAssets),
+      charManifest: !!char.additionalAssetManifest, emotions: (char.emotionImages || []).length,
+      dbOk: !!db, modules: mods.length, modulesOn: mods.filter(isOn).length,
+      moduleAssets: mods.reduce((n, m) => n + ((m.assets || []).length), 0),
+      moduleManifest: mods.some((m) => m.assetManifest && !Array.isArray(m.assets)),
+      scripts: rawScripts.filter((sc) => sc && typeof sc.out === 'string' && IMG_OUT.test(sc.out))
+        .map((sc) => ({ type: sc.type || '', in: String(sc.in).slice(0, 160), out: String(sc.out).slice(0, 220), used: imageScripts.some((x) => x.out === sc.out) }))
+    };
     const msgs = [];
     const greetings = [char.firstMessage, ...(char.alternateGreetings || [])];
     const greet = greetings[chat.fmIndex >= 0 ? chat.fmIndex + 1 : 0] ?? char.firstMessage;
@@ -1050,7 +1116,7 @@
       msgs.push({ key: String(m.chatId || 'i' + i).replace(/[.\s]/g, '_'), role: m.role === 'user' ? 'user' : 'char', raw: String(m.data || '') });
     });
     return {
-      charIdx, chatIdx, char, chat, persona, assets, assetIndex: buildAssetIndex(assets),
+      charIdx, chatIdx, char, chat, persona, assets, assetIndex: buildAssetIndex(assets), imageScripts, diag,
       charName: char.name || '', userName: (persona && persona.name) || '',
       charImage: char.image || '', userImage: (persona && persona.icon) || '',
       chatKey: KEY + 'doc:' + (char.chaId || charIdx) + ':' + (chat.id || chatIdx),
@@ -1102,7 +1168,8 @@
   function parseOpts(m) {
     return {
       mode: S.prefs.mode, cacheText: S.cacheText[m.key], charName: S.ctx.charName, userName: S.ctx.userName,
-      replacements: S.doc.replacements, override: S.doc.overrides[m.key], otherImages: !!S.prefs.otherImages
+      replacements: S.doc.replacements, override: S.doc.overrides[m.key], otherImages: !!S.prefs.otherImages,
+      imageScripts: S.ctx.imageScripts
     };
   }
 
@@ -1110,7 +1177,7 @@
   const parseCache = new Map();
   function parseCached(m) {
     const o = parseOpts(m);
-    const sig = [o.otherImages ? 1 : 0, o.mode, o.cacheText || '', o.charName, o.userName, JSON.stringify(o.replacements || []), o.override == null ? '\u0000' : o.override].join('\u0001');
+    const sig = [S.ctx.chatKey, (o.imageScripts || []).length, o.otherImages ? 1 : 0, o.mode, o.cacheText || '', o.charName, o.userName, JSON.stringify(o.replacements || []), o.override == null ? '\u0000' : o.override].join('\u0001');
     const hit = parseCache.get(m.key);
     if (hit && hit.raw === m.raw && hit.sig === sig) return hit.parsed;
     const parsed = parseMessage(m.raw, o);
@@ -1585,6 +1652,50 @@
     root.querySelectorAll('[data-cropview]').forEach((el) => { paintCropView(el); });
   }
 
+  function diagnosticText() {
+    const d = S.ctx.diag || {};
+    const L = [];
+    L.push(`[Log Editorial ${VERSION} 이미지 진단]`);
+    L.push(`캐릭터 에셋: ${d.charAssets}${d.charManifest ? ' (manifest 있음)' : ''} / 감정 이미지: ${d.emotions}`);
+    L.push(`DB 읽기: ${d.dbOk ? '성공' : '실패'} / 모듈: ${d.modules}개 (켜짐 ${d.modulesOn}) / 모듈 에셋: ${d.moduleAssets}${d.moduleManifest ? ' (manifest 있음)' : ''}`);
+    L.push(`이름 색인: ${S.ctx.assets.size}개`);
+    L.push(`이미지 정규식: ${(d.scripts || []).length}개`);
+    (d.scripts || []).forEach((x, i) => L.push(`  ${i + 1}. [${x.type || '종류 없음'}${x.used ? ', 적용' : ', 미적용'}] in: ${x.in}\n     out: ${x.out}`));
+    const model = buildModel();
+    const coverKey = resolveCoverKey(model);
+    const seen = new Set();
+    let others = 0;
+    const ovs = selectedMessages().filter((m) => S.doc.overrides[m.key] != null);
+    let lost = 0;
+    for (const m of ovs) {
+      const rawImgs = parseMessage(m.raw, { ...parseOpts(m), override: undefined, otherImages: true }).blocks.filter((b) => b.type === 'img' && b.img && b.img.am === false);
+      lost += rawImgs.filter((b) => !S.doc.overrides[m.key].includes(b.token)).length;
+    }
+    L.push(`편집본이 있는 메시지: ${ovs.length}개 / 편집본 때문에 빠진 이미지: ${lost}장`);
+    L.push('본문의 에셋메이드 외 이미지:');
+    for (const m of selectedMessages()) {
+      const p = parseMessage(m.raw, { ...parseOpts(m), otherImages: true });
+      for (const b of p.blocks) {
+        if (b.type !== 'img' || (b.img && b.img.am !== false) || seen.has(b.key)) continue;
+        seen.add(b.key); others++;
+        const name = b.key.replace(/^asset:/, '');
+        const hit = b.key.startsWith('asset:') ? assetKeyOf(name, S.ctx.assetIndex) : '';
+        const st = S.images[imgCk(b.key, b.key)];
+        const load = !st ? '아직 안 읽음' : st instanceof Promise ? '읽는 중' : st.error ? '읽기 실패' : '표시됨';
+        L.push(`  - ${b.key} → ${b.key.startsWith('asset:') ? (hit ? '에셋 "' + hit + '"' : '에셋 못 찾음') : '주소'} / ${load}`);
+        if (others >= 25) break;
+      }
+      if (others >= 25) break;
+    }
+    if (!others) {
+      L.push('  (없음 — 원문에서 이미지 표기를 찾지 못했어요)');
+      const sample = selectedMessages().map((m) => m.raw).join('\n').match(/<[^>]{0,80}(img|emo|src)[^>]{0,80}>|\{\{[^{}]{0,60}\}\}|\[[^\]\n]{0,40}\]/gi) || [];
+      L.push('  원문 속 비슷한 표기: ' + [...new Set(sample)].slice(0, 12).join('  '));
+    }
+    L.push('에셋 이름 예시: ' + [...S.ctx.assets.keys()].filter((n) => !isAmAsset(n)).slice(0, 25).join(', '));
+    return L.join('\n');
+  }
+
   function portraitBtns(who, def) {
     const id = S.doc.cast[who].customId;
     return `<div class="fo-row"><span class="fo-idx" style="flex:1">${id ? '직접 올린 이미지 사용 중' : '기본: ' + def}</span><button class="fo-btn sm" data-act="up-${who}">초상 바꾸기</button>${id ? `<button class="fo-btn sm" data-act="reset-${who}">기본으로</button>` : ''}</div>`;
@@ -1629,9 +1740,14 @@
     for (const m of selectedMessages()) hiddenN += parseCached(m).hidden || 0;
     let h = `<div class="fo-sec"><h4>넣을 이미지</h4>
       ${check('에셋메이드 외 이미지도 표시', 'prefs.otherImages')}
-      <div class="fo-hint">캐릭터 에셋·감정 이미지({{img::}} {{emotion::}} 등), 메시지 속 일반 이미지, 채팅에 첨부한 이미지예요. 끄면 에셋메이드 삽화와 직접 추가한 이미지만 들어가요.</div>
+      <div class="fo-hint">캐릭터·모듈 에셋, 감정 이미지({{img::}} {{emotion::}}, 봇 정규식이 띄우는 이미지 포함), 메시지 속 일반 이미지, 첨부 이미지예요. 끄면 에셋메이드 삽화와 직접 추가한 이미지만 들어가요.</div>
+      ${S.ctx && S.ctx.imageScripts && S.ctx.imageScripts.length ? `<div class="fo-hint">봇의 이미지 정규식 ${S.ctx.imageScripts.length}개를 함께 적용하고 있어요.</div>` : ''}
       ${S.prefs.otherImages ? select('크기', 'prefs.otherSize', [['small', '작게 (높이 200px까지)'], ['mid', '중간 (높이 320px까지)'], ['full', '삽화처럼 본문 폭에 맞춤']]) + '<div class="fo-hint">작게·중간은 원래 크기를 넘겨 키우지 않고, 삽화 번호도 매기지 않아요.</div>' : ''}
       ${!S.prefs.otherImages && hiddenN ? `<div class="fo-warn">지금 범위에서 ${hiddenN}장이 숨겨져 있어요.</div>` : ''}
+      </div>
+      <div class="fo-sec"><h4>이미지 진단</h4>
+      <div class="fo-hint">이미지가 안 뜨면 아래 버튼으로 진단 내용을 복사해서 제작자에게 보내 주세요.</div>
+      <div class="fo-row"><button class="fo-btn sm" data-act="diag-copy">진단 내용 복사</button><button class="fo-btn sm" data-act="diag-show">보기</button><button class="fo-btn sm" data-act="restore-imgs">편집본에 빠진 이미지 되살리기</button></div>
       </div>
       <div class="fo-sec"><h4>이미지 품질</h4>
       <div class="fo-hint">리치 복사는 이미지를 함께 복사해서 아카가 자동으로 업로드해요. 따로 연결할 필요 없어요.</div>
@@ -2162,6 +2278,37 @@
     if (ids[0]) { apply(ids[0]); changed(true); }
   }
 
+  // 1.2.0 이전 편집본에는 이름만 적은 이미지 자리가 없음 → 원래 위치(앞 문단 뒤)에 다시 넣음
+  function restoreMissingImages(m) {
+    const ov = S.doc.overrides[m.key];
+    if (ov == null) return 0;
+    const blocks = parseMessage(m.raw, { ...parseOpts(m), override: undefined, otherImages: true }).blocks;
+    const lines = ov.split('\n');
+    let added = 0;
+    // 기준점: 문단·제목 글자, 또는 편집본에 이미 있는 이미지 자리. 앞뒤 중 더 가까운 쪽을 씀
+    const findLine = (blk) => {
+      const want = (blk.type === 'img' ? blk.token : (blk.type === 'p' || blk.type === 'h') ? blockLine(blk) : '').trim();
+      return want ? lines.findIndex((ln) => ln.trim() === want) : -1;
+    };
+    blocks.forEach((b, i) => {
+      if (b.type !== 'img' || !b.img || b.img.am !== false || !b.token || ov.includes(b.token)) return;
+      let back = null, fwd = null;
+      for (let j = i - 1; j >= 0; j--) { const at = findLine(blocks[j]); if (at >= 0) { back = { d: i - j, at: at + 1 }; break; } }
+      for (let j = i + 1; j < blocks.length; j++) { const at = findLine(blocks[j]); if (at >= 0) { fwd = { d: j - i, at }; break; } }
+      const pick = back && (!fwd || back.d <= fwd.d) ? back : fwd;
+      const at = pick ? pick.at : lines.length;
+      lines.splice(at, 0, '', b.token, '');
+      added++;
+    });
+    if (added) S.doc.overrides[m.key] = lines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+    return added;
+  }
+  function restoreAllMissingImages() {
+    let n = 0;
+    for (const m of S.messages) if (S.doc.overrides[m.key] != null) n += restoreMissingImages(m);
+    return n;
+  }
+
   function editMessage(key) {
     const m = S.messages.find((x) => x.key === key);
     if (!m) return;
@@ -2206,6 +2353,9 @@
         case 'urlmatch': doUrlMatch(); break;
         case 'rep-add': S.doc.replacements.push({ from: '', to: '', regex: false, flags: 'g' }); changed(true); break;
         case 'editmode': S.editing = !S.editing; refreshPreview(); break;
+        case 'diag-copy': { const tx = diagnosticText(); copyText(tx).then((ok) => (ok ? toast('진단 내용을 복사했어요') : modal('이미지 진단', tx, { readonly: true }))); break; }
+        case 'restore-imgs': { const n = restoreAllMissingImages(); toast(n ? `이미지 ${n}장을 되살렸어요` : '되살릴 이미지가 없어요'); if (n) changed(true); break; }
+        case 'diag-show': modal('이미지 진단', diagnosticText(), { readonly: true, help: '전체 선택해서 복사할 수 있어요.' }); break;
         case 'theme-custom': {
           if (S.prefs.theme !== 'custom') {
             const cur = resolveTheme();
@@ -2319,6 +2469,7 @@
       const prefs = await store.get(KEY + 'prefs');
       S.prefs = { ...DEFAULT_PREFS, ...(prefs || {}) };
       if (!['first', 'all', 'none', 'off'].includes(S.prefs.toggle)) S.prefs.toggle = 'first';
+      if (prefs && prefs.otherImagesV !== 2) { S.prefs.otherImages = true; S.prefs.otherImagesV = 2; }
       const ctx = await loadContext();
       if (!reload || !S.ctx || S.ctx.chatKey !== ctx.chatKey) S.images = {};
       S.ctx = ctx;
@@ -2326,6 +2477,11 @@
       const saved = await store.get(ctx.chatKey);
       const base = newDoc(ctx);
       S.doc = saved ? { ...base, ...saved, cover: { ...base.cover, ...saved.cover }, cast: { ...base.cast, ...saved.cast, char: { ...base.cast.char, ...(saved.cast || {}).char }, user: { ...base.cast.user, ...(saved.cast || {}).user }, extra: ((saved.cast || {}).extra || []) } } : base;
+      if (S.doc.ovImgV !== 2) {
+        const n = restoreAllMissingImages();
+        S.doc.ovImgV = 2;
+        if (n) { setTimeout(() => toast(`예전에 편집한 메시지에 빠져 있던 이미지 ${n}장을 되살렸어요`), 600); saveDoc(); }
+      }
       if (!S.doc.cover.title) S.doc.cover.title = ctx.chat.name && !/^new chat$/i.test(ctx.chat.name) ? ctx.chat.name : (ctx.charName || '');
       applyUiTheme();
       if (reload && S.loaded) { await applyRange(null); return; }
