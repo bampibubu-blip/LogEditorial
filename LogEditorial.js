@@ -1,13 +1,13 @@
 //@name LogEditorial
-//@display-name 🗃️ Log Editorial 1.2.4
+//@display-name 🗃️ Log Editorial 1.2.5
 //@api 3.0
-//@version 1.2.4
+//@version 1.2.5
 //@update-url https://raw.githubusercontent.com/bampibubu-blip/LogEditorial/main/LogEditorial.js
 //@description 에셋메이드 삽화가 들어간 채팅 로그를 아카라이브용 에디토리얼 HTML로 만듭니다.
 (async () => {
   'use strict';
 
-  const VERSION = '1.2.4';
+  const VERSION = '1.2.5';
   const NAME = 'Log Editorial';
   // 저장소 키 (정식 출시 전 'folio:' 키로 저장된 설정도 읽어옴)
   const KEY = 'logeditorial:', LEGACY = 'folio:';
@@ -394,9 +394,34 @@
       if (SCENE_BREAK.test(line)) { blocks.push({ type: 'break' }); continue; }
       const hm = line.match(/^(#{1,6})\s+(.+?)\s*#*$/);
       if (hm) { blocks.push({ type: 'h', level: hm[1].length, text: hm[2] }); continue; }
-      blocks.push({ type: 'p', text: line, dialogue: DIALOGUE_START.test(line) });
+      for (const part of opts.splitAfterQuote === false ? [line] : splitAfterQuotes(line)) {
+        blocks.push({ type: 'p', text: part, dialogue: DIALOGUE_START.test(part) });
+      }
     }
     return { blocks, images: ex.images, hasTranslation: !!langs, hidden };
+  }
+
+  // 닫는 따옴표 뒤에 띄어쓰기를 두고 글이 이어지면 거기서 문단을 나눔
+  // ("좋아." 그가 말했다. → "좋아." / 그가 말했다.)  "좋아."라고 처럼 붙어 있으면 나누지 않음
+  const QUOTE_END = /(^|\s)("[^"\n]+"|\u201C[^\u201D\n]+\u201D|\u300C[^\u300D\n]+\u300D|\u300E[^\u300F\n]+\u300F)(?=\s+\S)/g;
+  function splitAfterQuotes(line) {
+    const cuts = [];
+    let m;
+    QUOTE_END.lastIndex = 0;
+    while ((m = QUOTE_END.exec(line))) {
+      const q = m[2], end = m.index + m[0].length;
+      // 쉼표·줄표로 끝나는 대사는 문장이 이어지는 것 ("좋아," 그가 말했다)
+      if (/[,，、\u2014\u2013-]\s*.$/.test(q)) continue;
+      // "좋아." 하고 / 라며 / 이라고 같은 인용 표현이 이어지면 그대로
+      if (/^\s+(?:하|라|이라|라는|이라는)/.test(line.slice(end))) continue;
+      cuts.push(end);
+    }
+    if (!cuts.length) return [line];
+    const parts = [];
+    let from = 0;
+    for (const c of cuts) { parts.push(line.slice(from, c).trim()); from = c; }
+    parts.push(line.slice(from).trim());
+    return parts.filter(Boolean);
   }
 
   // 블록 → 편집용 줄 (이미지는 ⟦삽화:n⟧ / ⟦이미지:id⟧)
@@ -517,7 +542,6 @@
     h += `<div${fo('bind', { path: 'doc.cover.title' })} style="${HF}font-size:clamp(24px,5.2vw,34px);font-weight:700;line-height:1.3;margin:14px 0 10px 0;color:${t.head};word-break:keep-all;">${esc(macro(c.title) || '제목 없는 기록')}</div>`;
     if (c.subtitle) h += `<div${fo('bind', { path: 'doc.cover.subtitle' })} style="font-size:15px;color:${t.soft};word-break:keep-all;">${esc(macro(c.subtitle))}</div>`;
     const chips = [];
-    if (c.author) chips.push(chip('by ' + c.author, t));
     for (const x of String(c.chips || '').split(',').map((s) => s.trim()).filter(Boolean)) chips.push(chip(x, t));
     if (c.botUrl) chips.push(linkBox(c.botUrl, esc(c.botLabel || 'Open Bot') + ' ↗', `display:inline-block;margin:3px 4px;padding:5px 14px;border-radius:999px;background:${t.accent};font-size:11px;line-height:1.4;letter-spacing:0.08em;color:${t.onAccent};`, t.onAccent));
     if (chips.length) h += `<div style="margin:26px 0 22px 0;">${ornament(t)}</div><div style="font-size:0;line-height:0;">${chips.join('')}</div>`;
@@ -557,10 +581,10 @@
     return `<div style="margin:52px 0 0 0;text-align:center;"><div style="font-size:11px;letter-spacing:0.34em;color:${t.accent};">CAST</div><div style="font-size:0;line-height:0;margin:0 -8px;">${html}</div></div>`;
   }
 
-  function renderOpener(ch, t, continued) {
-    const num = continued ? '' : `<div style="${HF}font-size:64px;line-height:1;font-weight:300;color:${t.numeral};letter-spacing:0.02em;">${pad2(ch.num)}</div>`;
+  function renderOpener(ch, t, continued, showNum = true) {
+    const num = continued || !showNum ? '' : `<div style="${HF}font-size:64px;line-height:1;font-weight:300;color:${t.numeral};letter-spacing:0.02em;">${pad2(ch.num)}</div>`;
     return num
-      + `<div style="font-size:11px;letter-spacing:0.34em;color:${t.accent};margin:${continued ? 0 : 8}px 0 0 0;">CHAPTER ${continued ? pad2(ch.num) + ' · 계속' : ''}</div>`
+      + `<div style="font-size:11px;letter-spacing:0.34em;color:${t.accent};margin:${continued || !showNum ? 0 : 8}px 0 0 0;">CHAPTER${continued ? ' ' + (showNum ? pad2(ch.num) + ' · ' : '') + '계속' : ''}</div>`
       + `<div${fo('bind', { path: 'doc.chapters.' + ch.id + '.title' })} style="${HF}font-size:23px;font-weight:600;margin:10px 0 0 0;color:${t.head};word-break:keep-all;">${esc(ch.title || '')}</div>`
       + (ch.sub ? `<div${fo('bind', { path: 'doc.chapters.' + ch.id + '.sub' })} style="font-size:13.5px;color:${t.muted};margin:6px 0 0 0;word-break:keep-all;">${esc(ch.sub)}</div>` : '');
   }
@@ -629,8 +653,12 @@
         } else if (b.type === 'img') {
           // 감정 이미지 같은 에셋메이드 외 이미지는 삽화 번호를 매기지 않음
           const other = b.img && b.img.am === false && o.otherSize !== 'full';
-          if (!other) plateNum++;
-          units.push({ kind: 'img', ch, msg: m.key, role, key: b.key, num: plateNum, other });
+          // 사용자가 체크를 끈 이미지: 결과물에서는 빼고, 미리보기에서만 흐리게 남김
+          const occ = (m.occ && m.occ[bi]) || '';
+          const ex = !!(occ && model.excluded && model.excluded[occ]);
+          if (ex && !o.pickImg) return;
+          if (!other && !ex) plateNum++;
+          units.push({ kind: 'img', ch, msg: m.key, role, key: b.key, num: plateNum, other, occ, ex });
         } else if (b.type === 'break') {
           units.push({ kind: 'break', ch, msg: m.key, role });
         } else if (b.type === 'h' && o.headings !== 'hide') {
@@ -651,17 +679,38 @@
   // 유저 차례를 흐리게: 글자색을 한 톤 낮추고 들여쓰기
   const mutedTheme = (t) => ({ ...t, ink: t.soft, dlg: t.soft, marker: t.panel, tint: t.panel });
 
+  const otherHeight = (o) => (o.otherSize === 'small' ? 200 : 320);
+
+  // 감정 이미지 등: 높이 상한(max-height)에 기대지 않고, 비율대로 계산한 크기를 직접 지정.
+  // 아카 스타일이 폭이나 높이를 바꿔도 늘어나지 않도록 틀 폭 · width/height 속성 · object-fit 까지 겹쳐 둠
+  function otherImageBox(w, h, hpx) {
+    if (!(w > 0 && h > 0)) return null;
+    const k = Math.min(1, hpx / h);
+    return { dw: Math.max(1, Math.round(w * k)), dh: Math.max(1, Math.round(h * k)) };
+  }
+  function renderOtherImage(src, dims, hpx) {
+    const box = dims ? otherImageBox(dims.w, dims.h, hpx) : null;
+    if (!box) {
+      // 크기를 모를 때: 폭만 제한하고 높이는 비율대로 (찌그러지지 않음)
+      const cap = Math.round(hpx * 0.75);
+      return `<div style="clear:both;margin:28px auto 28px auto;max-width:${cap}px;line-height:0;font-size:0;text-align:center;"><img src="${escUrl(src)}" alt="" style="width:auto;max-width:100%;height:auto;display:block;margin:0 auto;border-radius:12px;object-fit:contain;"></div>`;
+    }
+    return `<div style="clear:both;margin:28px auto 28px auto;width:${box.dw}px;max-width:100%;line-height:0;font-size:0;text-align:center;"><img src="${escUrl(src)}" width="${box.dw}" height="${box.dh}" alt="" style="width:${box.dw}px;max-width:100%;height:auto;display:block;margin:0 auto;border-radius:12px;object-fit:contain;"></div>`;
+  }
+
   function unitHtml(u, t, o, srcOf) {
     if (u.kind === 'p' && u.muted) return renderParagraph(u.b, mutedTheme(t), o, false, fo('p', { msg: u.msg, bi: u.bi })).replace('style="', 'style="padding-left:1.4em;');
     if (u.kind === 'p') return renderParagraph(u.b, t, o, u.drop, fo('p', { msg: u.msg, bi: u.bi }));
     if (u.kind === 'label') return u.html;
-    if (u.kind === 'img' && u.other) {
+    if (u.kind === 'img') {
       const src = srcOf(u.key);
       if (!src) return '';
-      const hpx = o.otherSize === 'small' ? 200 : 320;
-      return `<div style="clear:both;margin:28px 0 28px 0;line-height:0;font-size:0;text-align:center;"><img src="${escUrl(src)}" alt="" style="width:auto;height:auto;max-width:100%;max-height:${hpx}px;display:inline-block;margin:0 auto;border-radius:12px;"></div>`;
+      const h = u.other ? renderOtherImage(src, o.dimOf ? o.dimOf(u.key) : null, otherHeight(o))
+        : renderPlate(src, u.num, t, u.ex ? { ...o, plateCaption: false } : o, u.key);
+      if (!o.pickImg || !u.occ) return h;
+      // 미리보기 전용: 이미지 위 체크박스 (출력 HTML에는 들어가지 않음)
+      return `<div class="fo-imgwrap${u.other ? ' other' : ''}${u.ex ? ' ex' : ''}">${h}<label class="fo-imgck" title="결과물에 이 이미지 넣기"><input type="checkbox" data-occ="${esc(u.occ)}"${u.ex ? '' : ' checked'}></label></div>`;
     }
-    if (u.kind === 'img') return renderPlate(srcOf(u.key), u.num, t, o, u.key);
     if (u.kind === 'h') {
       const big = u.b.level <= 2;
       return `<div style="clear:both;margin:${big ? 40 : 32}px 0 16px 0;${HF}font-size:${big ? 18 : 16.5}px;line-height:1.5;font-weight:600;color:${t.head};word-break:keep-all;">${inlineFormat(u.b.text, t, o.dlgStyle, false)}</div>`;
@@ -735,7 +784,7 @@
       const body = renderBody(seg.filter((u) => u.kind !== 'chapter' && u.kind !== 'quote'), t, o, srcOf);
       const quotes = seg.filter((u) => u.kind === 'quote').map((u) => u.html).join('');
       if (ch.titled) {
-        const opener = renderOpener(ch, t, !startsHere);
+        const opener = renderOpener(ch, t, !startsHere, o.chapterNum !== false);
         if (o.toggle !== 'off') {
           const open = o.toggle === 'all' || (o.toggle === 'first' && ch.num === 1);
           h += `<details${open ? ' open=""' : ''} style="margin:${h ? 52 : 56}px 0 0 0;padding:0;"><summary style="list-style:none;cursor:pointer;text-align:center;padding:0 0 38px 0;outline:none;">${opener}<div style="display:inline-block;margin:16px 0 0 0;padding:4px 14px;border-radius:999px;background:${t.panel};font-size:10.5px;letter-spacing:0.14em;color:${t.toggle};">접기 · 펼치기</div></summary><div style="margin:0;padding:0;">${body}</div></details>`;
@@ -751,9 +800,11 @@
     return h;
   }
 
-  function wrapPage(inner, t, thumbSrc, font, credit = true) {
+  function wrapPage(inner, t, thumbSrc, font, bg = 'normal') {
+    const matBg = bg === 'normal' ? `background:${t.mat};` : '';
+    const sheetBg = bg === 'all' ? '' : `background:${t.sheet};box-shadow:0 1px 2px ${t.shadow}0.06),0 12px 36px ${t.shadow}0.10);`;
     const thumb = thumbSrc ? `<img src="${escUrl(thumbSrc)}" alt="" style="display:block;width:0;height:0;max-width:0;max-height:0;opacity:0;overflow:hidden;">` : '';
-    return `<div style="max-width:760px;margin:0 auto;background:${t.mat};padding:clamp(10px,3.6vw,28px);box-sizing:border-box;font-family:${font === 'serif' ? FONT : SANS};color:${t.ink};">${thumb}<div style="background:${t.sheet};border-radius:18px;box-shadow:0 1px 2px ${t.shadow}0.06),0 12px 36px ${t.shadow}0.10);padding:clamp(26px,6vw,40px) clamp(18px,6.6vw,52px) clamp(30px,6vw,44px) clamp(18px,6.6vw,52px);box-sizing:border-box;">${inner}</div>${credit ? `<div style="text-align:center;font-size:10.5px;color:${t.credit};margin:18px 0 4px 0;letter-spacing:0.08em;">Made with Log Editorial</div>` : '<div style="height:4px;font-size:0;line-height:0;"></div>'}</div>`;
+    return `<div style="max-width:760px;margin:0 auto;${matBg}padding:clamp(10px,3.6vw,28px);box-sizing:border-box;font-family:${font === 'serif' ? FONT : SANS};color:${t.ink};">${thumb}<div style="${sheetBg}border-radius:18px;padding:clamp(26px,6vw,40px) clamp(18px,6.6vw,52px) clamp(30px,6vw,44px) clamp(18px,6.6vw,52px);box-sizing:border-box;">${inner}</div><div style="text-align:center;font-size:10.5px;color:${t.credit};margin:18px 0 4px 0;letter-spacing:0.08em;">Made with Log Editorial</div></div>`;
   }
 
   /**
@@ -767,7 +818,7 @@
     NAMES = o.names || { char: (doc.cast.char || {}).name || '', user: (doc.cast.user || {}).name || '' };
     const units = buildUnits(model, o, t);
     for (const u of units) {
-      if (u.kind === 'chapter') u.len = visibleLength(renderOpener(u.ch, t, false)) + 8;
+      if (u.kind === 'chapter') u.len = visibleLength(renderOpener(u.ch, t, false, o.chapterNum !== false)) + 8;
       else u.len = visibleLength(unitHtml(u, t, o, () => ''));
     }
     if (o.userStyle === 'block') {
@@ -783,16 +834,16 @@
     };
     const groups = splitParts(units, sizes, o.limit || 60000);
     const total = groups.length;
-    const firstPlate = units.find((u) => u.kind === 'img');
+    const firstPlate = units.find((u) => u.kind === 'img' && !u.ex);
     return groups.map((g, i) => {
       const n = i + 1;
       let inner = n === 1 ? head : renderPartHeader(doc, t, n, total);
       inner += renderPartBody(g, t, o, srcOf);
       inner += renderFooter(doc, t, n, total);
-      const plateInPart = g.find((u) => u.kind === 'img');
+      const plateInPart = g.find((u) => u.kind === 'img' && !u.ex);
       const thumbKey = n === 1 ? (coverSrc ? 'cover' : firstPlate && firstPlate.key) : (plateInPart ? plateInPart.key : 'cover');
       const thumb = o.thumbnail ? srcOf(thumbKey || '') : '';
-      const html = wrapPage(inner, t, thumb, o.font || 'serif', o.credit !== false);
+      const html = wrapPage(inner, t, thumb, o.font || 'serif', o.bg || 'normal');
       return { html, chars: visibleLength(html), units: g.length };
     });
   }
@@ -868,7 +919,7 @@
     return { sx: (W - cw) * x / 100, sy: (H - ch) * y / 100, sw: cw, sh: ch };
   }
 
-  async function encodeImage(blob, { maxW = 960, quality = 0.86, square = 0, aspect = 0, crop = null } = {}) {
+  async function encodeImage(blob, { maxW = 960, quality = 0.86, square = 0, aspect = 0, crop = null, maxH = 0 } = {}) {
     const img = await blobToImage(blob);
     let sx = 0, sy = 0, sw = img.naturalWidth, sh = img.naturalHeight;
     let dw, dh;
@@ -881,8 +932,8 @@
       sx = r.sx; sy = r.sy; sw = r.sw; sh = r.sh;
       dw = Math.max(1, Math.round(Math.min(maxW, sw))); dh = Math.max(1, Math.round(dw / aspect));
     } else {
-      const k = Math.min(1, maxW / sw);
-      dw = Math.round(sw * k); dh = Math.round(sh * k);
+      const k = Math.min(1, maxW / sw, maxH ? maxH / sh : 1);
+      dw = Math.max(1, Math.round(sw * k)); dh = Math.max(1, Math.round(sh * k));
     }
     const cv = document.createElement('canvas');
     cv.width = dw; cv.height = dh;
@@ -1033,7 +1084,7 @@
   }
 
   if (TEST) {
-    globalThis.__LOGEDITORIAL__ = { compileImageScripts, applyImageScripts, buildAssetIndex, assetKeyOf, imageFromImgTag, cropRect, deriveTheme, contrast, THEME_ORDER, extractImages, parseMessage, renderDocument, splitParts, extractArcaUrls, makeZip, crc32, THEMES, blocksToEditable, blocksToText, visibleLength, applyReplacements };
+    globalThis.__LOGEDITORIAL__ = { otherImageBox, renderOtherImage, splitAfterQuotes, compileImageScripts, applyImageScripts, buildAssetIndex, assetKeyOf, imageFromImgTag, cropRect, deriveTheme, contrast, THEME_ORDER, extractImages, parseMessage, renderDocument, splitParts, extractArcaUrls, makeZip, crc32, THEMES, blocksToEditable, blocksToText, visibleLength, applyReplacements };
     return;
   }
   if (!R) { console.error(NAME + ': RisuAI 플러그인 API를 찾지 못했습니다.'); return; }
@@ -1044,7 +1095,7 @@
   const DEFAULT_PREFS = {
     theme: 'sage', dlgStyle: 'marker', dropCap: true, toggle: 'first', mode: 'original', plateCaption: true,
     masthead: true, imageMode: 'url', maxW: 960, quality: 0.86, limit: 60000, thumbnail: true, includeGreeting: true,
-    split: true, ui: 'auto', recentN: 30, font: 'serif', plateLabel: 'PLATE {n}', userStyle: 'none', hideUser: false, credit: true, otherImages: true, otherImagesV: 2, otherSize: 'mid', headings: 'sub',
+    split: true, ui: 'auto', recentN: 30, font: 'serif', plateLabel: 'PLATE {n}', userStyle: 'none', hideUser: false, credit: true, chapterNum: true, bg: 'normal', otherImages: true, otherImagesV: 2, otherSize: 'mid', splitAfterQuote: true, headings: 'sub',
     custom: { mat: '#e8e6df', sheet: '#fbfaf6', ink: '#2a2f2b', accent: '#5d7466', dlg: '', head: '', overrides: {} }, userThemes: []
   };
   const S = {
@@ -1169,7 +1220,7 @@
     return {
       mode: S.prefs.mode, cacheText: S.cacheText[m.key], charName: S.ctx.charName, userName: S.ctx.userName,
       replacements: S.doc.replacements, override: S.doc.overrides[m.key], otherImages: !!S.prefs.otherImages,
-      imageScripts: S.ctx.imageScripts
+      imageScripts: S.ctx.imageScripts, splitAfterQuote: S.prefs.splitAfterQuote !== false
     };
   }
 
@@ -1177,7 +1228,7 @@
   const parseCache = new Map();
   function parseCached(m) {
     const o = parseOpts(m);
-    const sig = [S.ctx.chatKey, (o.imageScripts || []).length, o.otherImages ? 1 : 0, o.mode, o.cacheText || '', o.charName, o.userName, JSON.stringify(o.replacements || []), o.override == null ? '\u0000' : o.override].join('\u0001');
+    const sig = [o.splitAfterQuote ? 1 : 0, S.ctx.chatKey, (o.imageScripts || []).length, o.otherImages ? 1 : 0, o.mode, o.cacheText || '', o.charName, o.userName, JSON.stringify(o.replacements || []), o.override == null ? '\u0000' : o.override].join('\u0001');
     const hit = parseCache.get(m.key);
     if (hit && hit.raw === m.raw && hit.sig === sig) return hit.parsed;
     const parsed = parseMessage(m.raw, o);
@@ -1187,18 +1238,36 @@
 
   function buildModel() {
     const msgs = selectedMessages().map((m) => ({ key: m.key, role: m.role, parsed: parseCached(m) }));
-    return { messages: msgs, chapters: S.doc.chapters };
+    // 이미지마다 "메시지|이미지|몇 번째" 로 자리를 매겨서, 같은 에셋이 여러 번 나와도 따로 켜고 끌 수 있게 함
+    for (const m of msgs) {
+      const seen = {};
+      m.occ = m.parsed.blocks.map((b) => {
+        if (b.type !== 'img') return '';
+        seen[b.key] = (seen[b.key] || 0) + 1;
+        return m.key + '|' + b.key + '|' + seen[b.key];
+      });
+    }
+    S.otherKeys = new Set();
+    for (const m of msgs) for (const b of m.parsed.blocks) if (b.type === 'img' && b.img && b.img.am === false) S.otherKeys.add(b.key);
+    return { messages: msgs, chapters: S.doc.chapters, excluded: S.doc.excludedImgs || {} };
   }
 
   // 출력에 쓰이는 이미지 키를 순서대로
-  function usedImageKeys(model) {
+  const isExcluded = (model, m, bi) => !!(m.occ && m.occ[bi] && model.excluded && model.excluded[m.occ[bi]]);
+  // 범위 안의 본문 이미지 키 (겹치지 않게, 나온 순서대로)
+  function bodyImageKeys(model) {
+    const keys = [];
+    for (const m of model.messages) m.parsed.blocks.forEach((b) => { if (b.type === 'img' && !keys.includes(b.key)) keys.push(b.key); });
+    return keys;
+  }
+  function usedImageKeys(model, withExcluded) {
     const keys = [];
     const add = (k) => { if (k && !keys.includes(k)) keys.push(k); };
     if (resolveCoverKey(model)) add('cover');
     if (S.doc.cast.on && S.doc.cast.char.portrait && (S.ctx.charImage || S.doc.cast.char.customId)) add('portrait:char');
     if (S.doc.cast.on && S.doc.cast.showUser && S.doc.cast.user.portrait && (S.ctx.userImage || S.doc.cast.user.customId)) add('portrait:user');
     if (S.doc.cast.on) for (const x of S.doc.cast.extra || []) if (x && x.portrait && (x.customId || x.asset) && (x.name || x.desc || x.tags)) add('portrait:' + x.id);
-    for (const m of model.messages) for (const b of m.parsed.blocks) if (b.type === 'img') add(b.key);
+    for (const m of model.messages) m.parsed.blocks.forEach((b, bi) => { if (b.type === 'img' && (withExcluded || !isExcluded(model, m, bi))) add(b.key); });
     return keys;
   }
 
@@ -1208,7 +1277,8 @@
     if (c.image === 'char') return S.ctx.charImage ? 'charimg' : '';
     if (c.image === 'url') return c.imageUrl ? 'url:' + c.imageUrl : '';
     if (c.image === 'custom') return c.customId ? 'custom:' + c.customId : '';
-    for (const m of model.messages) for (const b of m.parsed.blocks) if (b.type === 'img') return b.key;
+    if (c.image === 'pick' && c.pickKey && bodyImageKeys(model).includes(c.pickKey)) return c.pickKey;
+    for (const m of model.messages) for (let bi = 0; bi < m.parsed.blocks.length; bi++) if (m.parsed.blocks[bi].type === 'img' && !isExcluded(model, m, bi)) return m.parsed.blocks[bi].key;
     return S.ctx.charImage ? 'charimg' : '';
   }
 
@@ -1286,7 +1356,7 @@
       const blob = await sourceBlob(real === 'charimg' && key === 'cover' ? 'charimg' : real);
       if (!blob) return { error: true };
       try {
-        const out = await encodeImage(blob, { maxW: S.prefs.maxW, quality: S.prefs.quality, square, aspect: square ? 0 : (spec ? spec.aspect : 0), crop: spec ? spec.crop : null });
+        const out = await encodeImage(blob, { maxW: S.prefs.maxW, quality: S.prefs.quality, square, aspect: square ? 0 : (spec ? spec.aspect : 0), crop: spec ? spec.crop : null, maxH: otherMaxH(key) });
         S.lastGood[key] = out.dataUrl;
         return { ...out, real };
       } catch (e) {
@@ -1299,6 +1369,9 @@
     return r;
   }
 
+  // 작게 넣는 이미지는 표시 높이의 2배까지만 남김 (선명도는 유지, 용량은 줄임)
+  const otherMaxH = (key) => (S.otherKeys && S.otherKeys.has(key) && S.prefs.otherSize !== 'full' ? otherHeight(S.prefs) * 2 : 0);
+
   function imgCk(key, real) {
     let extra = key === 'portrait:char' ? S.doc.cast.char.customId || '' : key === 'portrait:user' ? S.doc.cast.user.customId || '' : '';
     if (key.startsWith('portrait:x')) {
@@ -1307,7 +1380,7 @@
     }
     const spec = cropSpec(key);
     const c = spec ? [spec.aspect.toFixed(4), spec.crop.x, spec.crop.y, spec.crop.zoom].join(',') : '';
-    return key + '|' + real + '|' + extra + '|' + c + '|' + S.prefs.maxW + '|' + S.prefs.quality;
+    return key + '|' + real + '|' + extra + '|' + c + '|' + S.prefs.maxW + '|' + S.prefs.quality + '|h' + otherMaxH(key);
   }
 
   // 원본 이미지 (위치 조정 미리보기용)
@@ -1408,6 +1481,16 @@
   .fo-count.over b{color:#e0603c}
   .fo-stage{flex:1;overflow:auto;padding:24px 12px 60px}
   .fo-frame{margin:0 auto;transition:width .2s}
+  .fo-imgwrap{position:relative}
+  .fo-imgwrap.other{width:fit-content;max-width:100%;margin-left:auto;margin-right:auto}
+  .fo-imgwrap.ex img{opacity:.28;filter:grayscale(1)}
+  .fo-imgck{position:absolute;top:54px;left:10px;width:30px;height:30px;display:flex;align-items:center;justify-content:center;border-radius:8px;background:rgba(20,22,24,.72);cursor:pointer;line-height:1;z-index:2}
+  .fo-imgwrap.other .fo-imgck{top:36px;left:8px}
+  .fo-imgck input{width:18px;height:18px;margin:0;cursor:pointer;accent-color:var(--focus)}
+  .fo-pick{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 6px 0}
+  .fo-pickcell{width:62px;height:62px;padding:0;border:2px solid transparent;border-radius:8px;overflow:hidden;background:var(--field);cursor:pointer;color:inherit;font-size:12px}
+  .fo-pickcell.on{border-color:var(--focus)}
+  .fo-pickcell img{width:100%;height:100%;object-fit:cover;display:block}
   .fo-img{display:flex;gap:8px;align-items:center;border:1px solid var(--line);border-radius:9px;padding:6px;margin:0 0 6px;background:var(--card)}
   .fo-img img{width:52px;height:52px;object-fit:cover;border-radius:6px;background:var(--line)}
   .fo-img .meta{flex:1;min-width:0}
@@ -1494,15 +1577,14 @@
         ${field('라벨', d + '.cover.eyebrow', '{{char}} × {{user}}')}
         ${field('제목', d + '.cover.title', 'A Day at the Orphanage School')}
         ${field('부제', d + '.cover.subtitle', '고아원 학교에서의 하루')}
-        ${field('작성자', d + '.cover.author')}
         ${field('칩', d + '.cover.chips', '모델, 프롬프트 (쉼표로 구분)')}
         ${field('봇 링크', d + '.cover.botUrl', 'https://arca.live/b/characterai/...')}
         ${field('링크 문구', d + '.cover.botLabel', 'Open Bot')}
         <div class="fo-hint">{{char}}, {{user}}는 등장인물 탭의 이름으로 바뀌어요. 제목·부제에도 쓸 수 있어요.</div>
-        ${check('맨 아래 "Made with Log Editorial" 표시', 'prefs.credit')}
         </div>
         <div class="fo-sec"><h4>표지 이미지</h4>
-        ${select('이미지', d + '.cover.image', [['auto', '첫 삽화 (없으면 캐릭터 이미지)'], ['char', '캐릭터 이미지'], ['custom', '직접 올린 이미지'], ['url', '이미지 주소'], ['none', '없음']])}
+        ${select('이미지', d + '.cover.image', [['auto', '첫 삽화 (없으면 캐릭터 이미지)'], ['pick', '본문 삽화에서 고르기'], ['char', '캐릭터 이미지'], ['custom', '직접 올린 이미지'], ['url', '이미지 주소'], ['none', '없음']])}
+        ${S.doc.cover.image === 'pick' ? coverPicker() : ''}
         ${S.doc.cover.image === 'url' ? field('주소', d + '.cover.imageUrl', 'https://...') : ''}
         ${S.doc.cover.image !== 'none' ? select('비율', d + '.cover.ratio', [['orig', '원본 비율 (자르지 않음)'], ['3:2', '3:2 가로'], ['16:9', '16:9 와이드'], ['4:3', '4:3'], ['1:1', '1:1 정사각형'], ['4:5', '4:5 세로']]) : ''}
         ${S.doc.cover.image !== 'none' && (S.doc.cover.ratio || 'orig') !== 'orig' ? cropControls(d + '.cover.crop', 'cover', 'rect') : ''}
@@ -1531,6 +1613,7 @@
         ${select('본문 속 #제목', p + '.headings', [['sub', '소제목으로 표시'], ['hide', '숨기기']])}
         ${select('대사 표시', p + '.dlgStyle', [['marker', '형광펜 밑줄'], ['color', '글자색만'], ['tint', '옅은 하이라이트']])}
         ${check('챕터 첫 글자 크게 (드롭캡)', p + '.dropCap')}
+        ${check('대사가 끝나면 문단 나누기', p + '.splitAfterQuote')}
         </div>
         <div class="fo-sec"><h4>유저 · 캐릭터 구분</h4>
         ${select('유저 메시지', p + '.userStyle', [['none', '같게 (구분 없음)'], ['block', '카드 · 옅은 바탕에 이름표'], ['muted', '흐리게 · 한 톤 낮추고 들여쓰기'], ['label', '이름표 · 말하는 쪽이 바뀔 때마다']])}
@@ -1538,6 +1621,7 @@
         <div class="fo-hint">이름표에는 등장인물 탭의 이름이 쓰여요.</div>
         </div>
         <div class="fo-sec"><h4>본문</h4>
+        ${check('챕터 숫자 번호 표시 (01, 02 …)', 'prefs.chapterNum')}
         ${select('챕터 접기', p + '.toggle', [['first', '토글 · 첫 챕터만 펼침'], ['all', '토글 · 모두 펼침'], ['none', '토글 · 모두 접힘'], ['off', '토글 끄기']])}
         </div>
         <div class="fo-sec"><h4>번역</h4>
@@ -1591,6 +1675,9 @@
         ${Object.entries(TOKEN_LABELS).filter(([k]) => k !== 'head').map(([k, l]) => colorRow(l, c + '.overrides.' + k, deriveTheme({ ...S.prefs.custom, overrides: {} }, '')[k])).join('')}</details>
         <div class="fo-row" style="margin-top:8px"><input class="fo-in" id="fo-tname" placeholder="테마 이름"><button class="fo-btn sm pri" data-act="theme-save">내 테마로 저장</button></div></div>`;
     }
+    h += `</div><div class="fo-sec"><h4>배경</h4>
+      ${select('배경', 'prefs.bg', [['normal', '기본 (바깥 배경 + 종이)'], ['mat', '바깥 배경만 투명'], ['all', '모두 투명 (종이도 없앰)']])}
+      ${S.prefs.bg === 'all' ? '<div class="fo-hint">글자색은 테마 그대로예요. 아카 다크모드로 보는 사람도 있으니, 밝은 배경과 어두운 배경 모두에서 읽히는 색인지 확인하세요.</div>' : ''}`;
     return h + '</div>';
   }
 
@@ -1621,6 +1708,20 @@
   }
 
   // 위치 조정: X · Y · 줌 슬라이더와 바로 보이는 미리보기
+  // 표지로 쓸 삽화 고르기
+  function coverPicker() {
+    const model = buildModel();
+    const keys = bodyImageKeys(model);
+    if (!keys.length) return '<div class="fo-hint">지금 범위에 삽화가 없어요.</div>';
+    const cur = resolveCoverKey(model);
+    const cells = keys.map((k, i) => {
+      const c = imgCacheGet(k, cur);
+      const src = (c && c.dataUrl) || S.lastGood[k] || directUrl(k) || '';
+      return `<button class="fo-pickcell${k === cur ? ' on' : ''}" data-coverpick="${esc(k)}" title="${i + 1}번째 이미지">${src ? `<img src="${escUrl(src)}" alt="">` : `<span>${i + 1}</span>`}</button>`;
+    }).join('');
+    return `<div class="fo-pick">${cells}</div><div class="fo-hint">표지로 쓸 삽화를 눌러 고르세요. 본문에서 체크를 끈 이미지도 표지로는 쓸 수 있어요.</div>`;
+  }
+
   function cropControls(base, key, shape) {
     const c = { ...(key === 'cover' ? { x: 50, y: 50, zoom: 1 } : PORTRAIT_CROP), ...(getPath(S, base) || {}) };
     const sl = (label, k, min, max, step, unit) => `<div class="fo-row fo-sl"><label>${label}</label><input type="range" min="${min}" max="${max}" step="${step}" value="${c[k]}" data-bind="${base}.${k}" data-crop="${esc(key)}"><span class="fo-slv">${k === 'zoom' ? Number(c[k]).toFixed(2) + '×' : Math.round(c[k]) + unit}</span></div>`;
@@ -1881,7 +1982,8 @@
       const c = imgCacheGet(key, coverKey);
       return c ? c.dataUrl : (forOutput === false && S.lastGood[key]) || directUrl(uk) || '';
     };
-    const o = { ...S.prefs, names: { user: S.doc.cast.user.name || S.ctx.userName || 'USER', char: S.doc.cast.char.name || S.ctx.charName || 'CHAR' }, themeObj: resolveTheme(), mark: forOutput === false && !!S.editing, captions: S.doc.captions || {}, limit: S.prefs.split ? (Number(S.prefs.limit) || 60000) : Infinity, thumbnail: !!(forOutput === true && S.prefs.thumbnail && S.prefs.imageMode === 'url') };
+    const dimOf = (key) => { const c = imgCacheGet(key, coverKey); return c ? { w: c.w, h: c.h } : null; };
+    const o = { ...S.prefs, dimOf, names: { user: S.doc.cast.user.name || S.ctx.userName || 'USER', char: S.doc.cast.char.name || S.ctx.charName || 'CHAR' }, themeObj: resolveTheme(), mark: forOutput === false && !!S.editing, pickImg: forOutput === false, captions: S.doc.captions || {}, limit: S.prefs.split ? (Number(S.prefs.limit) || 60000) : Infinity, thumbnail: !!(forOutput === true && S.prefs.thumbnail && S.prefs.imageMode === 'url') };
     return { parts: renderDocument(model, S.doc, o, srcOf), model, coverKey };
   }
 
@@ -1902,12 +2004,13 @@
     }
     renderViewBar();
     if (S.tab === 'export' && !typingInPanel()) renderPanel();
+    const pickTab = S.tab === 'cover' && S.doc.cover.image === 'pick';
     // 이미지가 아직 없으면 불러온 뒤 다시 그림
-    const keys = usedImageKeys(model).filter((k) => !imgCacheGet(k, coverKey) && !S.images[imgCk(k, k === 'cover' ? coverKey : k)]);
+    const keys = usedImageKeys(model, true).filter((k) => !imgCacheGet(k, coverKey) && !S.images[imgCk(k, k === 'cover' ? coverKey : k)]);
     if (keys.length) {
       await Promise.all(keys.map((k) => ensureImage(k, coverKey)));
       refreshPreview();
-      if (S.tab === 'images' && !typingInPanel()) renderPanel();
+      if ((S.tab === 'images' || pickTab) && !typingInPanel()) renderPanel();
     }
   }, 120);
 
@@ -2085,7 +2188,7 @@
 
   // kind: 'rich' | 'source' | 'save'
   async function doCopy(i, kind) {
-    if (kind === 'rich' || S.prefs.imageMode === 'data') await prepareImages();
+    await prepareImages();
     const { parts } = renderAll(kind === 'rich' ? 'rich' : true);
     const pt = parts[i];
     if (!pt) return;
@@ -2180,6 +2283,15 @@
         if (did) changed(S.tab === 'chapters' || S.tab === 'cover' || S.tab === 'cast');
         else if (S.pendingRefresh) refreshPreview();
       }, 0);
+    });
+    frame.addEventListener('change', (e) => {
+      const ck = e.target.closest && e.target.closest('input[data-occ]');
+      if (!ck) return;
+      const ex = S.doc.excludedImgs || (S.doc.excludedImgs = {});
+      if (ck.checked) delete ex[ck.dataset.occ]; else ex[ck.dataset.occ] = 1;
+      saveDoc();
+      refreshPreview();
+      if ((S.tab === 'images' || S.tab === 'export' || S.tab === 'cover') && !typingInPanel()) renderPanel();
     });
     frame.addEventListener('click', (e) => {
       if (S.editing && e.target.closest('summary') && e.target.closest('[data-fo]')) e.preventDefault();
@@ -2326,9 +2438,10 @@
 
   function bindEvents() {
     root.addEventListener('click', (e) => {
-      const t = e.target.closest('[data-tab],[data-act],[data-part],[data-width],[data-copy],[data-src],[data-save],[data-edit],[data-addimg],[data-theme],[data-utdel],[data-cropreset]');
+      const t = e.target.closest('[data-tab],[data-act],[data-part],[data-width],[data-copy],[data-src],[data-save],[data-edit],[data-addimg],[data-theme],[data-utdel],[data-cropreset],[data-coverpick]');
       if (!t) return;
       const ds = t.dataset;
+      if (ds.coverpick) { S.doc.cover.image = 'pick'; S.doc.cover.pickKey = ds.coverpick; S.doc.cover.crop = null; saveDoc(); renderPanel(); refreshPreview(); return; }
       if (ds.tab) { S.tab = ds.tab; renderPanel(); return; }
       if (ds.part != null) { S.part = +ds.part; refreshPreview(); return; }
       if (ds.width) { S.width = ds.width; refreshPreview(); return; }
